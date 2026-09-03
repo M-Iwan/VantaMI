@@ -5,7 +5,7 @@ ROOT = Path(__file__).parent
 README = ROOT / "README.md"
 
 package_data: dict[str, list[str]] = {
-    "novami": ["files/klekota_roth.joblib"],
+    "vantami": ["files/klekota_roth.joblib"],
 }
 
 setup(
