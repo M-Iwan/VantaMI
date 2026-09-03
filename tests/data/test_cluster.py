@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
-import novami.data.cluster as cluster
+import vantami.data.cluster as cluster
 
 
 def test_butina_cluster_assigns_cluster_column_with_mocked_similarity(monkeypatch):

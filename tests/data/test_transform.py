@@ -2,7 +2,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from novami.data.transform import DataTransformer, get_transformer_params
+from vantami.data.transform import DataTransformer, get_transformer_params
 
 
 def test_data_transformer_validate_helpers():

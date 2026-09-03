@@ -4,11 +4,11 @@
 A collection of ML/AI code for chemistry applications developed during my PhD.
 
 If you find the repo or its parts useful, it can be installed using:
-`pip install novami`
+`pip install vantami`
 
-For optional deep learning and ChemBERTa functionality:
+Full install:
 
-`pip install "novami[full]"`
+`pip install "vantami[full]"`
 
 The usual versioning conventions are followed loosely, with minor version bumps usually meaning a substantial update to a specific module.
 
@@ -16,12 +16,12 @@ The usual versioning conventions are followed loosely, with minor version bumps 
 Last updated on version: 0.4.3
 
 ```
-novami/
+vantami/
 ├── deprecated/   Old code kept because it might be useful one day (incl. MMMTGNN in deep/mmmtgnn.py)
 ├── dev/  New stuff I'm working on
 ├── dist/  PyPI distribution files
 ├── environments/   Environments for special-need code (CDDD, Mordred) 
-├── novami/
+├── vantami/
 │   ├── cache.py  Functions for caching required data
 │   ├── api/
 │   │   ├── convert.py   Conversion from IUPAC names to SMILES using OPSIN
@@ -84,6 +84,9 @@ novami/
 │       ├── predictions.py   Bunch of plots for assessing model performance; currently only Regression
 │       ├── properties.py   Plot and compare molecular properties between datasets
 │       └── utils.py   Helper functions and my custom palette
+├── vantami-r/
+│   └── R/
+│       └── lmm.R  Linear Mixed Models code
 ├── projects/
 │   ├── cddd_setup   Files for setting up CDDD environment anywhere
 │   ├── osmordred_setup   WIP: Corrected Mordred descriptors

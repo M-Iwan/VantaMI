@@ -5,10 +5,10 @@ import polars as pl
 import pytest
 import torch
 
-import novami.deep.loader as loader_mod
-from novami.deep.dataset import MMBatch, MMDataset
-from novami.deep.loader import MMLoader
-from novami.deep.models import MMTUnit
+import vantami.deep.loader as loader_mod
+from vantami.deep.dataset import MMBatch, MMDataset
+from vantami.deep.loader import MMLoader
+from vantami.deep.models import MMTUnit
 
 
 def _make_base_df(include_weights: bool = True, include_graph: bool = True, include_group: bool = False):

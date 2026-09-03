@@ -2,10 +2,10 @@ import argparse
 import datetime
 import os, joblib
 
-from novami.data.dataset import DatasetManager
-from novami.data.transform import DataTransformer
-from novami.ml.params import *
-from novami.ml.optimize import optimize_unit_optuna
+from vantami.data.dataset import DatasetManager
+from vantami.data.transform import DataTransformer
+from vantami.ml.params import *
+from vantami.ml.optimize import optimize_unit_optuna
 
 parser = argparse.ArgumentParser(prog="OptunaOptimization")
 

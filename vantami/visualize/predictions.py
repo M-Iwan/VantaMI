@@ -9,9 +9,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy.stats import probplot, norm
 
-from novami.data.distance import k_neighbors_distance
-from novami.ml.models import Unit, Ensemble
-from novami.visualize.utils import *
+from vantami.data.distance import k_neighbors_distance
+from vantami.ml.models import Unit, Ensemble
+from vantami.visualize.utils import *
 
 
 class Analyzer(ABC):

@@ -1,6 +1,7 @@
 # [0.4.3]: 03-09-2026
 [Added]
-- PyPI release 
+- PyPI release
+- Renamed to VantaMI as NovaMI was taken on PyPI
 
 # [0.4.2]: 21-08-2026
 
@@ -52,7 +53,7 @@
 
 [Removed]
 - A lot of old code from the novami.deep module
-- ``novami/deep/model.py`` (MMMTGNN and backbones); use ``deprecated/deep/mmmtgnn.py`` instead
+- ``vantami/deep/model.py`` (MMMTGNN and backbones); use ``deprecated/deep/mmmtgnn.py`` instead
 
 
 # [0.3.4]: 25-02-2026

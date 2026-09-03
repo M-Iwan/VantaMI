@@ -11,7 +11,7 @@ import pytest
 import torch
 from torch import nn
 
-from novami.deep.models import MMTUnit
+from vantami.deep.models import MMTUnit
 
 
 class _LossProbe(MMTUnit):

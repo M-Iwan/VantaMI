@@ -6,11 +6,11 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
-from novami.ml.evaluate import kf_evaluate, tt_evaluate
-from novami.ml.models import Unit, Ensemble, ClassifierUnit, RegressorUnit, ClassifierEnsemble, RegressorEnsemble
-from novami.ml.score import average_scores, score_regression_model, score_classification_model
-from novami.ml.utils import *
-from novami.data.manager import KFoldManager
+from vantami.ml.evaluate import kf_evaluate, tt_evaluate
+from vantami.ml.models import Unit, Ensemble, ClassifierUnit, RegressorUnit, ClassifierEnsemble, RegressorEnsemble
+from vantami.ml.score import average_scores, score_regression_model, score_classification_model
+from vantami.ml.utils import *
+from vantami.data.manager import KFoldManager
 
 
 def random_parameters(params: dict):

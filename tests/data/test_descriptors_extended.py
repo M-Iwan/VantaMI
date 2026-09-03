@@ -9,7 +9,7 @@ import polars as pl
 import pytest
 from rdkit import Chem
 
-import novami.data.descriptors as desc
+import vantami.data.descriptors as desc
 
 
 class _FakeHidden:

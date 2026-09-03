@@ -2,7 +2,7 @@ import polars as pl
 from rdkit import Chem
 from rdkit.Chem import PandasTools
 
-from novami.standardize.duplicates import mad_duplicates, check_unit_error
+from vantami.standardize.duplicates import mad_duplicates, check_unit_error
 
 
 def preprocess_binding_db(file_path: str, range_threshold: float = 1.0, z_threshold: float = 3.5) -> pl.DataFrame:

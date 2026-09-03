@@ -4,8 +4,8 @@ from itertools import product
 
 import numpy as np
 import polars as pl
-from novami.train.optimize import *
-from novami.io.file import read_pl, write_pl
+from vantami.train.optimize import *
+from vantami.io.file import read_pl, write_pl
 
 from lightgbm import LGBMRegressor
 from catboost import CatBoostRegressor

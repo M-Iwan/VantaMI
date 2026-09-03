@@ -31,7 +31,7 @@ from torch_geometric.nn import global_mean_pool, global_max_pool
 
 from deprecated.deep.dataset import StringDataset, GraphDataset
 from deprecated.deep.mmgv import MMGV
-from novami.deep.modules import build_linear_layers, build_graph_layers, build_conv_layers, build_recurrent_layers
+from vantami.deep.modules import build_linear_layers, build_graph_layers, build_conv_layers, build_recurrent_layers
 
 
 class GNNLayerBlock(nn.Module):

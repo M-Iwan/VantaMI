@@ -1,8 +1,8 @@
 from copy import deepcopy
 
-from novami.data.manager import TTManager, KFoldManager
-from novami.ml.models import *
-from novami.ml.utils import prepare_unit
+from vantami.data.manager import TTManager, KFoldManager
+from vantami.ml.models import *
+from vantami.ml.utils import prepare_unit
 
 
 def tt_evaluate(model_name: str, df: pl.DataFrame, smiles_col: str, features_col: str, target_col: str,

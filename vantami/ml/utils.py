@@ -3,9 +3,9 @@ import inspect
 import datetime
 from typing import Dict
 
-from novami.data.transform import DataTransformer, get_transformer_params
-from novami.ml.params import *
-from novami.ml.models import RegressorUnit, ClassifierUnit
+from vantami.data.transform import DataTransformer, get_transformer_params
+from vantami.ml.params import *
+from vantami.ml.models import RegressorUnit, ClassifierUnit
 
 
 def log(message: str):

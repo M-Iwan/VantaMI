@@ -15,7 +15,7 @@ from rdkit.Chem import rdMolDescriptors, Descriptors, rdFingerprintGenerator
 
 import torch
 
-from novami.io.file import read_pd, write_pd
+from vantami.io.file import read_pd, write_pd
 
 
 def smiles_2_ecfp(smiles: Union[str, List[str], np.ndarray[str]], radius: int = 2, nbits: int = 1024, count: bool = False):
@@ -736,7 +736,7 @@ def smiles_2_chemberta(smiles: Union[str, List[str], np.ndarray[str]], decimals:
 
     try:
         from transformers import AutoTokenizer, AutoModel, logging
-        from novami.cache import get_chemberta_model_path, get_chemberta_tokenizer_path
+        from vantami.cache import get_chemberta_model_path, get_chemberta_tokenizer_path
     except ImportError:
         raise ImportError("Function < smiles_2_chemberta > requires < transformers > library. Please install it "
                           "with < pip install transformers >")
@@ -808,7 +808,7 @@ def dataframe_2_chemberta(df: pl.DataFrame, smiles_col: str = 'SMILES', descript
 
     try:
         from transformers import AutoTokenizer, AutoModel, logging
-        from novami.cache import get_chemberta_model_path, get_chemberta_tokenizer_path
+        from vantami.cache import get_chemberta_model_path, get_chemberta_tokenizer_path
     except ImportError:
         raise ImportError("Function < dataframe_2_chemberta > requires < transformers > library. Please install it "
                           "with < pip install transformers >")
@@ -840,7 +840,7 @@ def dataframe_2_chemberta(df: pl.DataFrame, smiles_col: str = 'SMILES', descript
 def get_chemberta():
     try:
         from transformers import AutoTokenizer, AutoModel, logging
-        from novami.cache import get_chemberta_model_path, get_chemberta_tokenizer_path
+        from vantami.cache import get_chemberta_model_path, get_chemberta_tokenizer_path
     except ImportError:
         raise ImportError("Function < dataframe_2_chemberta > requires < transformers > library. Please install it "
                           "with < pip install transformers >")

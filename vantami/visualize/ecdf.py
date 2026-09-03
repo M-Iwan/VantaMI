@@ -3,8 +3,8 @@ from typing import Union, List, Optional
 import polars as pl
 import seaborn as sns
 
-from novami.visualize.utils import *
-from novami.data.distance import k_neighbors_distance
+from vantami.visualize.utils import *
+from vantami.data.distance import k_neighbors_distance
 
 
 def k_neighbours_ecdf(train_df: pl.DataFrame, test_df: pl.DataFrame, embedding_col: str, metric: str,

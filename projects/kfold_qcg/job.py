@@ -3,10 +3,10 @@ import datetime
 import os, joblib
 
 import polars as pl
-from novami.io import read_pl, write_pl
-from novami.data.manager import KFoldManager
-from novami.ml.optimize import optimize_unit_optuna
-from novami.ml.params import *
+from vantami.io import read_pl, write_pl
+from vantami.data.manager import KFoldManager
+from vantami.ml.optimize import optimize_unit_optuna
+from vantami.ml.params import *
 
 parser = argparse.ArgumentParser(prog="OptunaOptimization")
 

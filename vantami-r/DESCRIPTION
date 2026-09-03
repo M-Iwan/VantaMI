@@ -1,6 +1,6 @@
-Package: novami
+Package: vantami
 Title: ML/AI and Statistical Tools for Chemistry Applications
-Version: 0.4.1
+Version: 0.4.3
 Authors@R: person("Mateusz", "Iwan", email = "mateusz.iwan@hotmail.com", role = c("aut", "cre"))
 Description: A collection of machine learning, AI, and statistical modelling tools
     for chemistry and drug discovery applications.

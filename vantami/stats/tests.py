@@ -2,7 +2,7 @@ import numpy as np
 import numpy.typing as npt
 
 from scipy.stats import mannwhitneyu
-from novami.stats.utils import round_to_significant
+from vantami.stats.utils import round_to_significant
 
 def mwu_rank_biserial(u_stat: float, n1: int, n2: int):
     """

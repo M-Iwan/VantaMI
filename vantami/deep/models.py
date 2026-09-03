@@ -12,7 +12,7 @@ from sklearn.metrics import r2_score, root_mean_squared_error, mean_absolute_err
 import torch
 from torch import nn, Tensor
 
-from novami.deep.modules import build_linear_layers, build_graph_layers, build_conv_layers, build_recurrent_layers
+from vantami.deep.modules import build_linear_layers, build_graph_layers, build_conv_layers, build_recurrent_layers
 from torch_geometric.nn import global_mean_pool
 
 

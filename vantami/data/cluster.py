@@ -12,8 +12,8 @@ from rdkit.Chem.Scaffolds import MurckoScaffold
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 
-from novami.data.manipulate import embeddings_to_rdkit
-from novami.data.distance import distance_matrix
+from vantami.data.manipulate import embeddings_to_rdkit
+from vantami.data.distance import distance_matrix
 
 
 def butina_cluster(df: Union[pd.DataFrame, pl.DataFrame], fp_col: str = 'Morgan', threshold: float = 0.3,

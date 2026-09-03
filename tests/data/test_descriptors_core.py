@@ -2,7 +2,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from novami.data.descriptors import (
+from vantami.data.descriptors import (
     dataframe_2_atompair,
     dataframe_2_daylight,
     dataframe_2_ecfp,

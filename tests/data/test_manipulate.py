@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from novami.data.manipulate import (
+from vantami.data.manipulate import (
     bin_data,
     embeddings_to_rdkit,
     is_valid_fingerprint,

@@ -5,7 +5,7 @@ import torch
 from torch.utils.data import DataLoader
 from torch_geometric.data import Batch as GeometricBatch
 
-from novami.deep.dataset import MMDataset, MMBatch
+from vantami.deep.dataset import MMDataset, MMBatch
 
 
 class MMLoader:

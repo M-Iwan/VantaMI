@@ -2,7 +2,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-import novami.data.partition as part
+import vantami.data.partition as part
 
 
 def _base_df():

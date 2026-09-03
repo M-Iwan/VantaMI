@@ -10,8 +10,8 @@ from scipy.special import expit
 from sklearn.metrics import (confusion_matrix, roc_auc_score, r2_score, mean_absolute_error, root_mean_squared_error,
                              average_precision_score, brier_score_loss)
 
-from novami.ml.score import ece_score
-from novami.data.transform import DataTransformer
+from vantami.ml.score import ece_score
+from vantami.data.transform import DataTransformer
 
 
 class Unit(ABC):

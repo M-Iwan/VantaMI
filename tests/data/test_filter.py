@@ -1,6 +1,6 @@
 import polars as pl
 
-from novami.data.filter import filter_outliers
+from vantami.data.filter import filter_outliers
 
 
 def test_filter_outliers_keeps_expected_rows_and_columns():

@@ -5,7 +5,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from novami.data.distance import (
+from vantami.data.distance import (
     dict_similarity,
     distance_matrix,
     group_k_neighbors_distance,

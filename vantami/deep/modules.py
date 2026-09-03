@@ -8,7 +8,7 @@ import torch
 from torch import nn
 from torch_geometric.nn import GCNConv, SAGEConv, GINConv, GATConv, GATv2Conv, EdgeConv
 
-from novami.deep.utils import get_activation_fn
+from vantami.deep.utils import get_activation_fn
 
 
 class GNNModule(nn.Module):

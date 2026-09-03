@@ -2,7 +2,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from novami.data.manager import KFoldManager, TTManager
+from vantami.data.manager import KFoldManager, TTManager
 
 
 def _base_df():

@@ -3,8 +3,8 @@ import copy
 import numpy as np
 import pandas as pd
 
-from novami.ml.evaluate import kf_evaluate
-from novami.ml.score import average_scores
+from vantami.ml.evaluate import kf_evaluate
+from vantami.ml.score import average_scores
 
 
 def seq_feature_selection(model, df: pd.DataFrame, features_col: str, target_col: str, n_features: int, metric: str,

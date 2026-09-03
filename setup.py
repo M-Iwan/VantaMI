@@ -9,17 +9,17 @@ package_data: dict[str, list[str]] = {
 }
 
 setup(
-    name="novami",
+    name="vantami",
     version="0.4.3",
     author="Mateusz Iwan",
     author_email="mateusz.iwan@hotmail.com",
     description="A collection of ML/AI tools for chemistry applications.",
     long_description=README.read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
-    url="https://github.com/MateuszIwan/NovaMI",
+    url="https://github.com/MateuszIwan/VantaMI",
     project_urls={
-        "Source": "https://github.com/M-Iwan/NovaMI",
-        "Bug Tracker": "https://github.com/M-Iwan/NovaMI/issues",
+        "Source": "https://github.com/M-Iwan/VantaMI",
+        "Bug Tracker": "https://github.com/M-Iwan/VantaMI/issues",
     },
     packages=find_packages(),
     include_package_data=False,

@@ -7,8 +7,8 @@ import polars as pl
 
 from sklearn.model_selection import KFold, StratifiedKFold, GroupKFold, StratifiedGroupKFold
 
-from novami.data.manipulate import bin_data
-from novami.data.cluster import butina_cluster, murcko_cluster, cc_cluster
+from vantami.data.manipulate import bin_data
+from vantami.data.cluster import butina_cluster, murcko_cluster, cc_cluster
 
 
 def validate_dataframe(df: pl.DataFrame, features_col: Optional[str] = None, target_col: Optional[str] = None,
