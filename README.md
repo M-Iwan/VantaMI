@@ -1,9 +1,10 @@
-![](files/NovaMI.png)
+![](files/Vantami.png)
 
 ### What is this repository?
 A collection of ML/AI code for chemistry applications developed during my PhD.
 
 If you find the repo or its parts useful, it can be installed using:
+
 `pip install vantami`
 
 Full install:
