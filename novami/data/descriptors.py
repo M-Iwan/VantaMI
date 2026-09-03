@@ -736,15 +736,22 @@ def smiles_2_chemberta(smiles: Union[str, List[str], np.ndarray[str]], decimals:
 
     try:
         from transformers import AutoTokenizer, AutoModel, logging
+        from novami.cache import get_chemberta_model_path, get_chemberta_tokenizer_path
     except ImportError:
         raise ImportError("Function < smiles_2_chemberta > requires < transformers > library. Please install it "
                           "with < pip install transformers >")
 
     logging.set_verbosity_error()
 
-    tokenizer = joblib.load(files('novami.files').joinpath('ChemBERTa-tokenizer.joblib'))
-    model = joblib.load(files('novami.files').joinpath('ChemBERTa-model.joblib'))
+    model_path = get_chemberta_model_path()
+    tokenizer_path = get_chemberta_tokenizer_path()
+
+    if not model_path.is_file() or not tokenizer_path.is_file():
+        get_chemberta()
+
+    model = joblib.load(model_path)
     model.eval()
+    tokenizer = joblib.load(tokenizer_path)
 
     if isinstance(smiles, str):
         if Chem.MolFromSmiles(smiles) is None:
@@ -801,14 +808,13 @@ def dataframe_2_chemberta(df: pl.DataFrame, smiles_col: str = 'SMILES', descript
 
     try:
         from transformers import AutoTokenizer, AutoModel, logging
+        from novami.cache import get_chemberta_model_path, get_chemberta_tokenizer_path
     except ImportError:
         raise ImportError("Function < dataframe_2_chemberta > requires < transformers > library. Please install it "
                           "with < pip install transformers >")
 
-    if not os.path.isfile(str(files('novami.files').joinpath('ChemBERTa-tokenizer.joblib'))):
-        raise FileNotFoundError(f"ChemBERTa-tokenizer.joblib not found. Please call get_chemberta first.")
-    if not os.path.isfile(str(files('novami.files').joinpath('ChemBERTa-model.joblib'))):
-        raise FileNotFoundError(f"ChemBERTa-model.joblib not found. Please call get_chemberta first.")
+    if not get_chemberta_model_path().is_file() or not get_chemberta_tokenizer_path().is_file():
+        get_chemberta()
 
     smiles = list(set(df[smiles_col].to_list()))
     n_batches = math.ceil(len(smiles) / batch_size)
@@ -834,15 +840,21 @@ def dataframe_2_chemberta(df: pl.DataFrame, smiles_col: str = 'SMILES', descript
 def get_chemberta():
     try:
         from transformers import AutoTokenizer, AutoModel, logging
+        from novami.cache import get_chemberta_model_path, get_chemberta_tokenizer_path
     except ImportError:
         raise ImportError("Function < dataframe_2_chemberta > requires < transformers > library. Please install it "
                           "with < pip install transformers >")
 
-    tokenizer = AutoTokenizer.from_pretrained('DeepChem/ChemBERTa-100M-MLM')
-    model = AutoModel.from_pretrained('DeepChem/ChemBERTa-100M-MLM')
+    model = AutoModel.from_pretrained("DeepChem/ChemBERTa-100M-MLM")
+    tokenizer = AutoTokenizer.from_pretrained("DeepChem/ChemBERTa-100M-MLM")
 
-    joblib.dump(tokenizer, str(files('novami.files').joinpath('ChemBERTa-tokenizer.joblib')))
-    joblib.dump(model, str(files('novami.files').joinpath('ChemBERTa-model.joblib')))
+    joblib.dump(model, get_chemberta_model_path())
+    joblib.dump(tokenizer, get_chemberta_tokenizer_path())
+
+    return {
+        "model": str(get_chemberta_model_path()),
+        "tokenizer": str(get_chemberta_tokenizer_path())
+    }
 
 
 def smiles_2_mapc(smiles: Union[str, List[str], np.ndarray[str]], radius: int = 2, nbits: int = 1024):

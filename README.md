@@ -4,18 +4,25 @@
 A collection of ML/AI code for chemistry applications developed during my PhD.
 
 If you find the repo or its parts useful, it can be installed using:
-`pip install git+https://github.com/M-Iwan/NovaMI.git`
+`pip install novami`
+
+For optional deep learning and ChemBERTa functionality:
+
+`pip install "novami[full]"`
 
 The usual versioning conventions are followed loosely, with minor version bumps usually meaning a substantial update to a specific module.
 
 ### Repository Structure
-Last updated on version: 0.4.2
+Last updated on version: 0.4.3
 
 ```
 novami/
 ├── deprecated/   Old code kept because it might be useful one day (incl. MMMTGNN in deep/mmmtgnn.py)
+├── dev/  New stuff I'm working on
+├── dist/  PyPI distribution files
 ├── environments/   Environments for special-need code (CDDD, Mordred) 
 ├── novami/
+│   ├── cache.py  Functions for caching required data
 │   ├── api/
 │   │   ├── convert.py   Conversion from IUPAC names to SMILES using OPSIN
 │   │   └── resolve.py   Get SMILES from name using PubChem, CIR, or (WIP) CAS
@@ -83,10 +90,11 @@ novami/
 │   └── qcg_template   Template for QCG PilotJob training on bigger scale (one node)
 ├── temp/   Storage for temporary files
 ├── tests/   Whatever I'm developing at the moment
-├── .gitignore   Ignored Files
+├── .gitignore   
 ├── CHANGELOG.md   List of more important changes between versions
 ├── code_dev.ipynb   Currently tested/developed additions
-├── LICENSE   Self-explanatory
+├── LICENSE   
+├── pyproject.toml  
 ├── README.md   This file!
 └── setup.py   Most of required libraries, some day I *might* add specific versions.
 ```
