@@ -8,23 +8,179 @@ from typing import Union, List
 from itertools import chain
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import polars as pl
 from rdkit import Chem
 from rdkit.Chem import rdMolDescriptors, Descriptors, rdFingerprintGenerator
 
-import torch
-
 from vantami.io.file import read_pd, write_pd
 
 
-def smiles_2_ecfp(smiles: Union[str, List[str], np.ndarray[str]], radius: int = 2, nbits: int = 1024, count: bool = False):
+def smiles_2_inchi(smiles: Union[str, List[str], npt.NDArray[str]]) -> str:
+    """
+    Convert SMILES to the corresponding InChI representation.
+
+    Parameters
+    ----------
+    smiles: Union[str, List[str], npt.NDArray[str]]
+        A SMILES string or a list/array of SMILES strings.
+
+    Returns
+    -------
+    inchi: npt.NDArray
+    """
+
+    if isinstance(smiles, str):
+        if (mol := Chem.MolFromSmiles(smiles)) is None:
+            print(f'Unable to construct a valid molecule from < {smiles} >')
+            return np.nan
+
+        inchi = Chem.MolToInchi(mol)
+
+    elif isinstance(smiles, list) or isinstance(smiles, np.ndarray):
+        mols = [Chem.MolFromSmiles(smi) for smi in smiles]
+        if any([mol is None for mol in mols]):
+            print(f"At least one valid molecule cannot be constructed from provided SMILES")
+            return [np.nan] * len(mols)
+
+        inchi = [Chem.MolToInchi(mol) for mol in mols]
+        return inchi
+
+    else:
+        raise TypeError(f"Expected smiles to be str or List[str], got {type(smiles)} instead")
+
+
+def dataframe_2_inchi(df: pl.DataFrame, smiles_col: str = "SMILES", inchi_col: str = "InChI",
+                      n_jobs: int = 1, batch_size: int = 512):
+
+    """
+    Convert SMILES string(s) in a DataFrame to InChI representation.
+
+    Parameters
+    ----------
+    df : pl.DataFrame
+        A polars DataFrame.
+    smiles_col : str, optional
+        Name of column with SMILES.
+    inchi_col : str, optional
+        Name of column for the output.
+    n_jobs: int, optional
+        Number of cores to use for calculations.
+    batch_size: int, optional
+        Number of SMILES per batch.
+
+    Returns
+    -------
+    df : pl.DataFrame
+        A polars Dataframe with added InChI column.
+    """
+
+    smiles = list(set(df[smiles_col].to_list()))
+    n_batches = math.ceil(len(smiles) / batch_size)
+    smiles_batches = np.array_split(smiles, n_batches)
+
+    inchis = Parallel(n_jobs=n_jobs, verbose=1, timeout=60, backend='loky')(
+        delayed(smiles_2_inchi)(smiles=smi) for smi in smiles_batches
+    )
+
+    inchis = chain.from_iterable(inchis)
+
+    smiles_df = pl.DataFrame({
+        smiles_col: smiles,
+        inchi_col: inchis
+    })
+
+    df = df.join(smiles_df, on=smiles_col, how='left')
+
+    return df
+
+
+def smiles_2_inchi_key(smiles: Union[str, List[str], npt.NDArray[str]]) -> str:
+    """
+    Convert SMILES to the corresponding InChI Key representation.
+
+    Parameters
+    ----------
+    smiles: Union[str, List[str], npt.NDArray[str]]
+        A SMILES string or a list/array of SMILES strings.
+
+    Returns
+    -------
+    inchi: npt.NDArray
+    """
+
+    if isinstance(smiles, str):
+        if (mol := Chem.MolFromSmiles(smiles)) is None:
+            print(f'Unable to construct a valid molecule from < {smiles} >')
+            return np.nan
+
+        inchi = Chem.MolToInchiKey(mol)
+
+    elif isinstance(smiles, list) or isinstance(smiles, np.ndarray):
+        mols = [Chem.MolFromSmiles(smi) for smi in smiles]
+        if any([mol is None for mol in mols]):
+            print(f"At least one valid molecule cannot be constructed from provided SMILES")
+            return [np.nan] * len(mols)
+
+        inchi = [Chem.MolToInchiKey(mol) for mol in mols]
+        return inchi
+
+    else:
+        raise TypeError(f"Expected smiles to be str or List[str], got {type(smiles)} instead")
+
+
+def dataframe_2_inchi_key(df: pl.DataFrame, smiles_col: str = "SMILES", inchi_col: str = "InChIKey",
+                          n_jobs: int = 1, batch_size: int = 512):
+    """
+    Convert SMILES string(s) in a DataFrame to InChI Key representation.
+
+    Parameters
+    ----------
+    df : pl.DataFrame
+        A polars DataFrame.
+    smiles_col : str, optional
+        Name of column with SMILES.
+    inchi_col : str, optional
+        Name of column for the output.
+    n_jobs: int, optional
+        Number of cores to use for calculations.
+    batch_size: int, optional
+        Number of SMILES per batch.
+
+    Returns
+    -------
+    df : pl.DataFrame
+        A polars Dataframe with added InChIKey column.
+    """
+
+    smiles = list(set(df[smiles_col].to_list()))
+    n_batches = math.ceil(len(smiles) / batch_size)
+    smiles_batches = np.array_split(smiles, n_batches)
+
+    inchis = Parallel(n_jobs=n_jobs, verbose=1, timeout=60, backend='loky')(
+        delayed(smiles_2_inchi)(smiles=smi) for smi in smiles_batches
+    )
+
+    inchis = chain.from_iterable(inchis)
+
+    smiles_df = pl.DataFrame({
+        smiles_col: smiles,
+        inchi_col: inchis
+    })
+
+    df = df.join(smiles_df, on=smiles_col, how='left')
+
+    return df
+
+
+def smiles_2_ecfp(smiles: Union[str, List[str], npt.NDArray[str]], radius: int = 2, nbits: int = 1024, count: bool = False):
     """
     Convert SMILES string(s) to a (Count) Extended Connectivity Fingerprint.
 
     Parameters
     ----------
-    smiles: Union[str, List[str], np.ndarray[str]]
+    smiles: Union[str, List[str], npt.NDArray[str]]
         A SMILES string or a list of SMILES strings.
     radius: int, optional
         The radius parameter for ECFP calculation. Default is 2.
@@ -68,13 +224,13 @@ def smiles_2_ecfp(smiles: Union[str, List[str], np.ndarray[str]], radius: int = 
         return fps
 
     else:
-        raise TypeError(f"Expected smiles to be str or List[str], got {type(smiles)} instead")
+        raise TypeError(f"Expected smiles to be str, List[str] or npt.NDArray[str], got {type(smiles)} instead")
 
 
 def dataframe_2_ecfp(df: pl.DataFrame, smiles_col: str = 'SMILES', descriptor_col: str = None, radius: int = 2,
                      nbits: int = 1024, count: bool = False, n_jobs: int = 1, batch_size: int = 512):
     """
-    Convert SMILES string(s) in a DataFrame to a Extended Connectivity (Count) Fingerprint.
+    Convert SMILES string(s) in a DataFrame to an Extended Connectivity (Count) Fingerprint.
 
     Parameters
     ----------
@@ -127,14 +283,14 @@ def dataframe_2_ecfp(df: pl.DataFrame, smiles_col: str = 'SMILES', descriptor_co
     return df
 
 
-def smiles_2_daylight(smiles: Union[str, List[str], np.ndarray[str]], min_path: int = 1, max_path: int = 7,
+def smiles_2_daylight(smiles: Union[str, List[str], npt.NDArray[str]], min_path: int = 1, max_path: int = 7,
                       nbits: int = 1024, count: bool = False):
     """
     Convert SMILES in a DataFrame to Daylight (Count) Fingerprints.
 
     Parameters
     ----------
-    smiles: Union[str, List[str], np.ndarray[str]]
+    smiles: Union[str, List[str], npt.NDArray[str]]
         A SMILES string or a list of SMILES strings.
     min_path: int
         Smallest path length to consider. Default is 1.
@@ -181,7 +337,7 @@ def smiles_2_daylight(smiles: Union[str, List[str], np.ndarray[str]], min_path: 
         return fps
 
     else:
-        raise TypeError(f"Expected smiles to be str or Union[List[str], np.ndarray[str]], got {type(smiles)} instead")
+        raise TypeError(f"Expected smiles to be str, List[str] or npt.NDArray[str], got {type(smiles)} instead")
 
 
 def dataframe_2_daylight(df: pl.DataFrame, smiles_col: str = 'SMILES', descriptor_col: str = None, min_path: int = 1,
@@ -242,14 +398,14 @@ def dataframe_2_daylight(df: pl.DataFrame, smiles_col: str = 'SMILES', descripto
     return df
 
 
-def smiles_2_atompair(smiles: Union[str, List[str], np.ndarray[str]], min_distance: int = 1, max_distance: int = 7,
+def smiles_2_atompair(smiles: Union[str, List[str], npt.NDArray[str]], min_distance: int = 1, max_distance: int = 7,
                       nbits: int = 1024, count: bool = False):
     """
     Convert SMILES in to AtomPair (Count) Fingerprints.
 
     Parameters
     ----------
-    smiles: Union[str, List[str], np.ndarray[str]]
+    smiles: Union[str, List[str], npt.NDArray[str]]
         A SMILES string or a list of SMILES strings.
     min_distance: int
         Smallest distance between two atoms to consider. Default is 1.
@@ -296,7 +452,7 @@ def smiles_2_atompair(smiles: Union[str, List[str], np.ndarray[str]], min_distan
         return fps
 
     else:
-        raise TypeError(f"Expected smiles to be str or Union[List[str], np.ndarray[str]], got {type(smiles)} instead")
+        raise TypeError(f"Expected smiles to be str, List[str] or npt.NDArray[str], got {type(smiles)} instead")
 
 
 def dataframe_2_atompair(df: pl.DataFrame, smiles_col: str = 'SMILES', descriptor_col: str = None, min_distance: int = 1,
@@ -358,13 +514,13 @@ def dataframe_2_atompair(df: pl.DataFrame, smiles_col: str = 'SMILES', descripto
     return df
 
 
-def smiles_2_maccs(smiles: Union[str, List[str], np.ndarray[str]]):
+def smiles_2_maccs(smiles: Union[str, List[str], npt.NDArray[str]]):
     """
     Convert SMILES to MACCS Fingerprints.
 
     Parameters
     ----------
-    smiles: Union[str, List[str]]
+    smiles: Union[str, List[str], npt.NDArray[str]]
         A SMILES or list of SMILES strings.
 
     Returns
@@ -392,7 +548,7 @@ def smiles_2_maccs(smiles: Union[str, List[str], np.ndarray[str]]):
         return fps
 
     else:
-        raise TypeError(f"Expected smiles to be str or Union[List[str], np.ndarray[str]], got {type(smiles)} instead")
+        raise TypeError(f"Expected smiles to be str, List[str] or npt.NDArray[str], got {type(smiles)} instead")
 
 
 def dataframe_2_maccs(df: pl.DataFrame, smiles_col: str = 'SMILES', descriptor_col: str = 'MACCS',
@@ -439,13 +595,13 @@ def dataframe_2_maccs(df: pl.DataFrame, smiles_col: str = 'SMILES', descriptor_c
     return df
 
 
-def smiles_2_klek(smiles: Union[str, List[str], np.ndarray[str]]):
+def smiles_2_klek(smiles: Union[str, List[str], npt.NDArray[str]]):
     """
     Convert SMILES to Klekota&Roth Fingerprints.
 
     Parameters
     ----------
-    smiles: Union[str, List[str]]
+    smiles: Union[str, List[str], npt.NDArray[str]]
         A SMILES or list of SMILES strings.
 
     Returns
@@ -460,7 +616,7 @@ def smiles_2_klek(smiles: Union[str, List[str], np.ndarray[str]]):
         fp = np.array(fp, dtype=np.uint8)
         return fp
 
-    klekota_smarts = joblib.load(files('novami.files').joinpath('klekota_roth.joblib'))
+    klekota_smarts = joblib.load(files('vantami.files').joinpath('klekota_roth.joblib'))
 
     if isinstance(smiles, str):
         if (mol := Chem.MolFromSmiles(smiles)) is None:
@@ -478,7 +634,7 @@ def smiles_2_klek(smiles: Union[str, List[str], np.ndarray[str]]):
         return [get_fp(mol=mol, smarts=klekota_smarts) for mol in mols]
 
     else:
-        raise TypeError(f"Expected smiles to be str or Union[List[str], np.ndarray[str]], got {type(smiles)} instead")
+        raise TypeError(f"Expected smiles to be str, List[str] or npt.NDArray[str], got {type(smiles)} instead")
 
 
 def dataframe_2_klek(df: pl.DataFrame, smiles_col: str = 'SMILES', descriptor_col: str = 'Klek',
@@ -525,13 +681,13 @@ def dataframe_2_klek(df: pl.DataFrame, smiles_col: str = 'SMILES', descriptor_co
     return df
 
 
-def smiles_2_rdkit(smiles: Union[str, List[str], np.ndarray[str]], decimals: int = 5):
+def smiles_2_rdkit(smiles: Union[str, List[str], npt.NDArray[str]], decimals: int = 5):
     """
     Convert SMILES to RDKit descriptors.
 
     Parameters
     ----------
-    smiles: Union[str, List[str], np.ndarray[str]]
+    smiles: Union[str, List[str], npt.NDArray[str]]
         A SMILES or list of SMILES strings.
     decimals: int
         Number of decimals to keep.
@@ -562,7 +718,7 @@ def smiles_2_rdkit(smiles: Union[str, List[str], np.ndarray[str]], decimals: int
         return [get_desc(mol=mol, decimals=decimals) for mol in mols]
 
     else:
-        raise TypeError(f"Expected smiles to be str or Union[List[str], np.ndarray[str]], got {type(smiles)} instead")
+        raise TypeError(f"Expected smiles to be str, List[str] or npt.NDArray[str], got {type(smiles)} instead")
 
 
 def dataframe_2_rdkit(df: pl.DataFrame, smiles_col: str = 'SMILES', descriptor_col: str = 'RDKit',
@@ -611,13 +767,13 @@ def dataframe_2_rdkit(df: pl.DataFrame, smiles_col: str = 'SMILES', descriptor_c
     return df
 
 
-def smiles_2_common_rdkit(smiles: Union[str, List[str], np.ndarray[str]], decimals: int = 5):
+def smiles_2_common_rdkit(smiles: Union[str, List[str], npt.NDArray[str]], decimals: int = 5):
     """
     Convert SMILES to common RDKit descriptors.
 
     Parameters
     ----------
-    smiles: Union[str, List[str], np.ndarray[str]]
+    smiles: Union[str, List[str], npt.NDArray[str]]
         A SMILES or list of SMILES strings.
     decimals: int
         Number of decimals to keep.
@@ -663,7 +819,7 @@ def smiles_2_common_rdkit(smiles: Union[str, List[str], np.ndarray[str]], decima
         return [get_desc(mol) for mol in mols]
 
     else:
-        raise TypeError(f"Expected smiles to be str or Union[List[str], np.ndarray[str]], got {type(smiles)} instead")
+        raise TypeError(f"Expected smiles to be str, List[str] or npt.NDArray[str], got {type(smiles)} instead")
 
 
 def dataframe_2_common_rdkit(df: pl.DataFrame, smiles_col: str = 'SMILES',
@@ -713,11 +869,11 @@ def dataframe_2_common_rdkit(df: pl.DataFrame, smiles_col: str = 'SMILES',
     return df
 
 
-def smiles_2_chemberta(smiles: Union[str, List[str], np.ndarray[str]], decimals: int = 5):
+def smiles_2_chemberta(smiles: Union[str, List[str], npt.NDArray[str]], decimals: int = 5):
     """
     Parameters
     ----------
-    smiles: Union[str, List[str]]
+    smiles: Union[str, List[str], npt.NDArray[str]]
         A valid SMILES or list of valid SMILES strings.
     decimals: int
         Number of decimals to keep.
@@ -733,6 +889,11 @@ def smiles_2_chemberta(smiles: Union[str, List[str], np.ndarray[str]], decimals:
         with torch.no_grad():
             emb = model(**tokens).last_hidden_state.mean(dim=1).squeeze().numpy()
         return np.round(emb, decimals)
+
+    try:
+        import torch
+    except ImportError:
+        raise ImportError("Function < smiles_2_chemberta > requires PyTorch.")
 
     try:
         from transformers import AutoTokenizer, AutoModel, logging
@@ -777,7 +938,7 @@ def smiles_2_chemberta(smiles: Union[str, List[str], np.ndarray[str]], decimals:
             return np.nan * len(mols)
 
     else:
-        raise TypeError(f"Expected smiles to be str or Union[List[str], np.ndarray[str]], got {type(smiles)} instead")
+        raise TypeError(f"Expected smiles to be str, List[str] or npt.NDArray[str], got {type(smiles)} instead")
 
 
 def dataframe_2_chemberta(df: pl.DataFrame, smiles_col: str = 'SMILES', descriptor_col: str = 'ChemBERTa',
@@ -805,6 +966,10 @@ def dataframe_2_chemberta(df: pl.DataFrame, smiles_col: str = 'SMILES', descript
     df : pl.DataFrame
         A polars Dataframe with added ChemBERTa column.
     """
+    try:
+        import torch
+    except ImportError:
+        raise ImportError("Function < dataframe_2_chemberta > requires PyTorch.")
 
     try:
         from transformers import AutoTokenizer, AutoModel, logging
@@ -857,13 +1022,13 @@ def get_chemberta():
     }
 
 
-def smiles_2_mapc(smiles: Union[str, List[str], np.ndarray[str]], radius: int = 2, nbits: int = 1024):
+def smiles_2_mapc(smiles: Union[str, List[str], npt.NDArray[str]], radius: int = 2, nbits: int = 1024):
     """
     Convert SMILES to MAPC descriptors.
 
     Parameters
     ----------
-    smiles: Union[str, List[str], np.ndarray[str]]
+    smiles: Union[str, List[str], npt.NDArray[str]]
         A valid SMILES or list of valid SMILES strings.
     radius: int, optional
         The radius parameter for MAPC calculation. Default is 2.
@@ -896,7 +1061,7 @@ def smiles_2_mapc(smiles: Union[str, List[str], np.ndarray[str]], radius: int = 
         return [encode(mol, max_radius=radius, n_permutations=nbits) for mol in mols]
 
     else:
-        raise TypeError(f"Expected smiles to be str or Union[List[str], np.ndarray[str]], got {type(smiles)} instead")
+        raise TypeError(f"Expected smiles to be str or Union[List[str], npt.NDArray[str]], got {type(smiles)} instead")
 
 
 def dataframe_2_mapc(df: pl.DataFrame, smiles_col: str = 'SMILES', descriptor_col: str = 'MAPC',
