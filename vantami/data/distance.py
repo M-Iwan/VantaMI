@@ -1,77 +1,420 @@
-from typing import Optional, Tuple, List, Dict
+from typing import Optional, Tuple, List, Dict, Sequence
 from joblib import Parallel, delayed
 from itertools import chain
 
 import numpy as np
+import numpy.typing as npt
 import polars as pl
+
 from scipy.spatial.distance import cdist
+from rdkit import DataStructs
+from rdkit.DataStructs.cDataStructs import ExplicitBitVect
+
+from vantami.data.manipulate import convert_embeddings
 
 
-def distance_matrix(array_1: np.ndarray, array_2: np.ndarray, metric: str = 'jaccard', n_jobs: int = 1) -> np.ndarray:
+"""
+Supporting functions for distance_matrix 
+"""
+
+
+Embedding = Union[npt.NDArray, ExplicitBitVect]
+EmbeddingSequence = Sequence[Embedding]
+
+
+RDKIT_SIMILARITY_FUNCTIONS = {
+    "jaccard": DataStructs.BulkTanimotoSimilarity,
+    "braunblanquet": DataStructs.BulkBraunBlanquetSimilarity,
+    "dice": DataStructs.BulkDiceSimilarity,
+    "kulczynski": DataStructs.BulkKulczynskiSimilarity,
+    "mcconnaughey": DataStructs.BulkMcConnaugheySimilarity,
+    "rogotgoldberg": DataStructs.BulkRogotGoldbergSimilarity,
+    "russel": DataStructs.BulkRusselSimilarity,
+    "sokal": DataStructs.BulkSokalSimilarity,
+}
+
+
+def _rdkit_triu_b(array: Sequence[ExplicitBitVect], metric: str, threshold: Optional[float],
+                  start_idx: int, end_idx: int, ):
     """
-    Compute the distance matrix between two arrays using specified metric.
+    Calculate strict upper-triangular RDKit distances for a row block.
+    """
+    similarity_fn = RDKIT_SIMILARITY_FUNCTIONS[metric]
+    rows = []
+
+    for i in range(start_idx, end_idx):
+        similarities = similarity_fn(
+            array[i],
+            array[i + 1:],
+        )
+
+        distances = 1.0 - np.asarray(similarities, dtype=np.float64)
+
+        if threshold is not None:
+            distances = (distances <= threshold).astype(np.uint8)
+
+        rows.append((i, distances))
+
+    return start_idx, rows
+
+
+def _rdkit_rect_b(query_array: Sequence[ExplicitBitVect], ref_array: Sequence[ExplicitBitVect], metric: str,
+                  threshold: Optional[float], batch_idx: int):
+    """
+    Calculate one rectangular RDKit distance-matrix block.
+    """
+    similarity_fn = RDKIT_SIMILARITY_FUNCTIONS[metric]
+    rows = []
+
+    for array in query_array:
+        similarities = similarity_fn(
+            array,
+            ref_array,
+        )
+
+        distances = 1.0 - np.asarray(similarities, dtype=np.float64)
+
+        if threshold is not None:
+            distances = (distances <= threshold).astype(np.uint8)
+
+        rows.append(distances)
+
+    return batch_idx, np.vstack(rows)
+
+
+def _scipy_triu_b(matrix: npt.NDArray, metric: str, threshold: Optional[float],
+                  start_idx: int, end_idx: int):
+    """
+    Calculate one upper-triangular SciPy block.
+    """
+    distances = cdist(
+        XA=matrix[start_idx:end_idx],
+        XB=matrix[start_idx + 1:],
+        metric=metric,
+    )
+
+    if threshold is not None:
+        distances = (distances <= threshold).astype(np.uint8)
+
+    for local_row in range(end_idx - start_idx):
+        distances[local_row, :local_row] = 0
+
+    return start_idx, distances
+
+
+def _scipy_rect_b(query_matrix: npt.NDArray, ref_matrix: npt.NDArray, metric: str,
+                  threshold: Optional[float], batch_idx: int):
+    """
+    Calculate one rectangular SciPy distance-matrix block.
+    """
+    distances = cdist(
+        XA=query_matrix,
+        XB=reference_matrix,
+        metric=metric,
+    )
+
+    if threshold is not None:
+        distances = (distances <= threshold).astype(np.uint8)
+
+    return batch_idx, distances
+
+
+def _as_rdkit_array(values: EmbeddingSequence, metric: str):
+    """
+    Return ExplicitBitVect objects, converting NumPy binary vectors if needed.
+    """
+    if len(values) == 0:
+        return []
+
+    all_rdkit = all(
+        isinstance(value, ExplicitBitVect)
+        for value in values
+    )
+
+    any_rdkit = any(
+        isinstance(value, ExplicitBitVect)
+        for value in values
+    )
+
+    if any_rdkit and not all_rdkit:
+        raise TypeError(
+            "Cannot mix NumPy arrays and ExplicitBitVect objects in the same sequence."
+        )
+
+    if all_rdkit:
+        return list(values)
+
+    if not all(isinstance(value, np.ndarray) for value in values):
+        raise TypeError(
+            "RDKit metrics require a sequence containing either only NumPy "
+            "arrays or only ExplicitBitVect objects."
+        )
+
+    converted = convert_embeddings(
+        list(values),
+        metric=metric,
+    )
+    return converted
+
+
+def _as_numpy_matrix(values: EmbeddingSequence, name: str):
+    """
+    Stack a sequence of equally sized one-dimensional NumPy arrays.
+    """
+    if len(values) == 0:
+        return np.empty((0, 0), dtype=np.float64)
+
+    if not all(isinstance(value, np.ndarray) for value in values):
+        raise TypeError(
+            f"SciPy metrics require every item in {name} to be a NumPy array."
+        )
+
+    if not all(value.ndim == 1 for value in values):
+        raise ValueError(
+            f"Expected every array in {name} to be one-dimensional."
+        )
+
+    return np.vstack(values)
+
+
+"""
+Main functions
+"""
+
+
+def distane_matrix(array_1: EmbeddingSequence, array_2: Optional[EmbeddingSequence] = None, metric: str = "jaccard",
+                   n_jobs: int = 1, batch_size: int = 1024, return_triu: bool = True, threshold: Optional[float] = None):
+    """
+    Compute an exact pairwise distance or binary neighbourhood matrix.
+
+    RDKit is used for metrics in RDKIT_SIMILARITY_FUNCTIONS.
+    Other metrics are passed to scipy.spatial.distance.cdist.
 
     Parameters
     ----------
-    array_1 : numpy.ndarray
-        First input array.
-    array_2 : numpy.ndarray
-        Second input array.
-    metric : str, optional
-        The distance metric to use. Default is 'jaccard'.
-        See scipy.spatial.distance.cdist for a list of supported metrics.
-    n_jobs : int, optional
-        Number of jobs to run in parallel. Default is 1.
+    array_1: Sequence[numpy.ndarray | ExplicitBitVect]
+        First sequence of arrays
+    array_2: Sequence[numpy.ndarray | ExplicitBitVect] | None, optional
+        Second sequence of arrays
+        If None, array_1 is compared with itself (which is also faster). Default is None.
+    metric: str, optional
+        Distance metric to use. RDKit metrics:
+            "jaccard", "braunblanquet", "dice", "kulczynski", "mcconnaughey",
+            "rogotgoldberg","russel","sokal"
+    n_jobs: int, optional
+        Number of parallel worker processes. Default is 1.
+    batch_size: int, optional
+        Number of rows processed in each work block. Default is 1024.
+    return_triu: bool, optional
+        If True, return only the strict upper triangle. The diagonal and lower triangle are zero.
+        Relevant only when array_2 is None.
+    threshold : float | None, optional
+        If numeric, return a uint8 binary neighbourhood matrix in which a pair is 1 when
+        its distance is less than or equal to threshold, otherwise 0. If None, return float64 distances.
 
     Returns
     -------
     numpy.ndarray
-        Distance matrix of shape (array_1.shape[0], array_2.shape[0]).
-        Each element (i, j) represents the distance between array_1[i] and array_2[j]
-        according to the specified metric.
+        Distance matrix or binary neighbourhood matrix.
+
+        For self-comparison with return_triu=True, only positions where
+        i < j are populated.
+
+        For rectangular comparisons, return_triu does not apply and a full
+        matrix is returned.
     """
 
-    if not isinstance(array_1, np.ndarray):
-        raise TypeError(f'Expected array_1 to be np.ndarray, got {type(array_1)} instead.')
+    if not isinstance(array_1, Sequence):
+        raise TypeError(
+            f"Expected array_1 to be a sequence of NumPy arrays or ExplicitBitVect objects, "
+            f"got {type(array_1)} instead."
+        )
 
-    if not isinstance(array_2, np.ndarray):
-        raise TypeError(f'Expected array_2 to be np.ndarray, got {type(array_2)} instead.')
+    if array_2 is not None and not isinstance(array_2, Sequence):
+        raise TypeError(
+            "Expected array_2 to be a sequence of NumPy arrays, ExplicitBitVect objects, or None; "
+            f"got {type(array_2)} instead."
+        )
 
-    if metric not in ['braycurtis', 'canberra', 'chebychev', 'cityblock', 'correlation', 'cosine', 'dice',
-                      'euclidean', 'hamming', 'minkowski', 'pnorm', 'jaccard', 'jensenshannon', 'kulczynski1',
-                      'mahalanobis', 'rogerstanimoto', 'russellrao', 'seuclidean', 'sokalmichener', 'sokalsneath',
-                      'sqeuclidean', 'sqeuclid', 'yule']:
+    if batch_size < 1:
+        raise ValueError(f"Expected batch_size to be at least 1, got {batch_size} instead.")
 
-        raise ValueError(f'Metric {metric} is not supported.')
+    self_comparison = array_2 is None
 
-    if not isinstance(n_jobs, int):
-        raise TypeError(f'Expected n_jobs to be int, got {type(n_jobs)} instead.')
+    values_1 = list(array_1)
+    values_2 = values_1 if self_comparison else list(array_2)
 
-    if n_jobs < 1:
-        raise ValueError(f'Expected n_jobs to be at least 1, got {n_jobs} instead.')
+    output_dtype = np.uint8 if threshold is not None else np.float64
 
-    def distance_chunk(sub_array_1: np.ndarray, array_2: np.ndarray, metric: str, idx: int) \
-            -> Tuple[int, np.ndarray]:
+    similarity_fn = RDKIT_SIMILARITY_FUNCTIONS.get(metric)
 
-        chunk_distance = cdist(XA=sub_array_1, XB=array_2, metric=metric)
-        return idx, chunk_distance
+    # RDKit path
 
-    chunks = Parallel(n_jobs=n_jobs, backend='loky')(
-        delayed(distance_chunk)(sub_array_1, array_2, metric, idx)
-                        for idx, sub_array_1 in enumerate(np.array_split(array_1, n_jobs))
+    if similarity_fn is not None:
+        fingerprints_1 = _as_rdkit_array(
+            values_1,
+            metric=metric,
+        )
+
+        fingerprints_2 = (
+            fingerprints_1 if self_comparison
+            else _as_rdkit_array(values_2, metric=metric)
+        )
+
+        n_rows = len(fingerprints_1)
+        n_cols = len(fingerprints_2)
+
+        if n_rows == 0:
+            return np.empty((0, n_cols), dtype=output_dtype)
+
+        if n_cols == 0:
+            return np.empty((n_rows, 0), dtype=output_dtype)
+
+        # Self-comparison path; upper triu by default
+        if self_comparison:
+            result = np.zeros((n_rows, n_rows), dtype=output_dtype)
+
+            if n_rows < 2:
+                return result
+
+            batches = Parallel(n_jobs=n_jobs, backend="loky")(
+                delayed(_rdkit_triu_b)(
+                    array=fingerprints_1,
+                    metric=metric,
+                    threshold=threshold,
+                    start_idx=start_idx,
+                    end_idx=min(start_idx + batch_size, n_rows - 1),
+                )
+                for start_idx in range(0, n_rows - 1, batch_size)
+            )
+
+            for _, rows in sorted(batches, key=lambda batch: batch[0]):
+                for row_idx, distances in rows:
+                    result[row_idx, row_idx + 1:] = distances
+
+            if not return_triu:
+                result += result.T
+
+            return result
+
+        # rectangular matrix if array_2 is not None
+        batches = [
+            (
+                batch_idx,
+                fingerprints_1[start_idx:start_idx + batch_size],
+            )
+            for batch_idx, start_idx in enumerate(
+                range(0, n_rows, batch_size)
+            )
+        ]
+
+        chunks = Parallel(n_jobs=n_jobs, backend="loky")(
+            delayed(_rdkit_rect_b)(
+                query_array=batch,
+                ref_array=fingerprints_2,
+                metric=metric,
+                threshold=threshold,
+                batch_idx=batch_idx,
+            )
+            for batch_idx, batch in batches
+        )
+
+        return np.vstack(
+            [
+                block
+                for _, block in sorted(
+                    chunks,
+                    key=lambda chunk: chunk[0],
+                )
+            ]
+        )
+
+    # Scipy path
+    matrix_1 = _as_numpy_matrix(values_1, "array_1")
+
+    matrix_2 = (
+        matrix_1 if self_comparison
+        else _as_numpy_matrix(values_2, "array_2")
     )
 
-    sorted_chunks = sorted(chunks, key=lambda x: x[0])
-    result = np.vstack([chunk for _, chunk in sorted_chunks])
+    n_rows = matrix_1.shape[0]
+    n_cols = matrix_2.shape[0]
 
-    return result
+    if n_rows == 0:
+        return np.empty((0, n_cols), dtype=output_dtype)
+
+    if n_cols == 0:
+        return np.empty((n_rows, 0), dtype=output_dtype)
+
+    if matrix_1.shape[1] != matrix_2.shape[1]:
+        raise ValueError(
+            "Embeddings in array_1 and array_2 must have the same length."
+        )
+
+    # "triu"-like calculations
+    if self_comparison:
+        result = np.zeros((n_rows, n_rows), dtype=output_dtype)
+
+        if n_rows < 2:
+            return result
+
+        blocks = Parallel(n_jobs=n_jobs, backend="loky")(
+            delayed(_scipy_triu_b)(
+                matrix=matrix_1,
+                metric=metric,
+                threshold=threshold,
+                start_idx=start_idx,
+                end_idx=min(start_idx + batch_size, n_rows - 1),
+            )
+            for start_idx in range(0, n_rows - 1, batch_size)
+        )
+
+        for start_idx, block in sorted(blocks, key=lambda block: block[0]):
+            end_idx = start_idx + block.shape[0]
+            result[start_idx:end_idx, start_idx + 1:] = block
+
+        if not return_triu:
+            result += result.T
+
+        return result
+
+    # if array_2 is not None
+    batches = [
+        (
+            batch_idx,
+            matrix_1[start_idx:start_idx + batch_size],
+        )
+        for batch_idx, start_idx in enumerate(
+            range(0, n_rows, batch_size)
+        )
+    ]
+
+    chunks = Parallel(n_jobs=n_jobs, backend="loky")(
+        delayed(_scipy_rect_b)(
+            query_matrix=batch,
+            ref_matrix=matrix_2,
+            metric=metric,
+            threshold=threshold,
+            batch_idx=batch_idx,
+        )
+        for batch_idx, batch in batches
+    )
+
+    return np.vstack(
+        [
+            block
+            for _, block in sorted(
+                chunks,
+                key=lambda chunk: chunk[0],
+            )
+        ]
+    )
 
 
-def k_smallest_rows(array: np.ndarray, k: int) -> np.ndarray:
+def k_smallest_rows(array: npt.NDArray, k: int):
     """
     Find the k smallest values across each row.
     """
-
     # Not enough columns, just return the array
     if array.shape[1] <= k:
         return array
@@ -83,11 +426,10 @@ def k_smallest_rows(array: np.ndarray, k: int) -> np.ndarray:
     return array[row_idx, col_idx]
 
 
-def k_smallest_columns(array: np.ndarray, k: int) -> np.ndarray:
+def k_smallest_columns(array: npt.NDArray, k: int):
     """
     Find the k smallest values across each column.
     """
-
     # Not enough rows, just return the array
     if array.shape[0] <= k:
         return array
@@ -99,7 +441,7 @@ def k_smallest_columns(array: np.ndarray, k: int) -> np.ndarray:
     return array[row_idx, col_idx]
 
 
-def k_largest_rows(array: np.ndarray, k: int) -> np.ndarray:
+def k_largest_rows(array: np.ndarray, k: int):
     """
     Find the k largest values across each row.
     """
@@ -113,7 +455,7 @@ def k_largest_rows(array: np.ndarray, k: int) -> np.ndarray:
     return array[row_idx, col_idx]
 
 
-def k_largest_columns(array: np.ndarray, k: int) -> np.ndarray:
+def k_largest_columns(array: np.ndarray, k: int):
     """
     Find the k largest values across each column.
     """
@@ -127,7 +469,7 @@ def k_largest_columns(array: np.ndarray, k: int) -> np.ndarray:
     return array[row_idx, col_idx]
 
 
-def k_neighbors_distance(query_array: np.ndarray, ref_array: np.ndarray = None, metric: str = 'jaccard', n_jobs: int = 1,
+def k_neighbors_distance(query_array: npt.NDArray, ref_array: npt.NDArray = None, metric: str = 'jaccard', n_jobs: int = 1,
                          nearest_k: Optional[List[int]] = None, furthest_k: Optional[List[int]] = None) -> pl.DataFrame:
     """
     Calculate distance statistics between points in query and reference arrays. For each entry in query array,
@@ -139,9 +481,9 @@ def k_neighbors_distance(query_array: np.ndarray, ref_array: np.ndarray = None, 
 
     Parameters
     ----------
-    query_array : np.ndarray
+    query_array : npt.NDArray
         Query array, typically the test set.
-    ref_array : np.ndarray, optional
+    ref_array : npt.NDArray, optional
         Reference array, typically the training set. If not passed, self-comparison.
     metric : str, optional
         Distance metric to use. Default is 'jaccard'.
@@ -227,7 +569,7 @@ def k_neighbors_distance(query_array: np.ndarray, ref_array: np.ndarray = None, 
     for k, size in enumerate([split.shape[0] for split in splits][:-1], 1):
         k_indices[k] = k_indices[k-1] + size
 
-    def neighbor_chunk(query_array: np.ndarray, sub_ref_array: np.ndarray , metric: str, idx: int, k_indices: Dict,
+    def neighbor_chunk(query_array: npt.NDArray, sub_ref_array: npt.NDArray , metric: str, idx: int, k_indices: Dict,
                        self_comparison: bool, max_n_k: int = 1, max_f_k: int = 1):
 
         chunk_distance = cdist(XA=sub_ref_array, XB=query_array, metric=metric)
@@ -503,7 +845,7 @@ def dict_similarity(string: str, target_mapping: dict, method: str = 'fuzzy', th
 
 def string_distance(string_1, string_2, method: str = 'levenshtein'):
     """
-    Calulace distance between two strings.
+    Calculate distance between two strings.
 
     Parameters
     ----------
