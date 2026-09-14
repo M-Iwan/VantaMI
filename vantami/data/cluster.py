@@ -5,7 +5,6 @@ from typing import Union
 from joblib import Parallel, delayed
 
 import numpy as np
-import pandas as pd
 import polars as pl
 from rdkit import DataStructs, Chem
 from rdkit.Chem.Scaffolds import MurckoScaffold
@@ -16,129 +15,114 @@ from vantami.data.manipulate import embeddings_to_rdkit
 from vantami.data.distance import distance_matrix
 
 
-def butina_cluster(df: Union[pd.DataFrame, pl.DataFrame], fp_col: str = 'Morgan', threshold: float = 0.3,
-                   n_jobs: int = -2, batch_size: int = 256, id_col: str = 'MolID') -> pd.DataFrame:
+def butina_cluster(df: pl.DataFrame, fp_col: str = "ECFP", threshold: float = 0.3, metric: str = "jaccard",
+                   n_jobs: int = 1, batch_size: int = 1024):
     """
-    TODO: extend to any metric type
-    Performs Butina Clustering using RDKit. Parallel computing and batch processing is supported.
+    Perform Butina clustering from a thresholded pairwise neighbourhood graph.
 
     Parameters
     ----------
-    df: Union[pl.DataFrame, pd.DataFrame]
-        Polars or Pandas DataFrame with fingerprint column.
-    fp_col: str
-        Name of the column with fingerprints. Default is Morgan
-    threshold: float
-        Distance threshold. Pair of FPs is marked as neighbors if distance <= threshold. Default is 0.3
-    n_jobs: int
-        Number of cores to use. Default is -2 (i.e. use all but one cores)
-    batch_size: int
-        Number of rows allocated to each process during neighborhood matrix calculation.
-    id_col: str
-        Name of the column with unique row identifiers. Default is MolID
+    df : pl.DataFrame
+        Input DataFrame
+    fp_col : str, optional
+        Name of the column containing one embedding per row. Default is ECFP.
+    threshold : float, optional
+        Distance threshold for defining neighbours. Two entries are neighbours
+        when their distance is less than or equal to this value. Default is 0.3.
+    metric : str, optional
+        Metric passed to distance_matrix. Default is "jaccard"
+    n_jobs : int, optional
+        Number of parallel jobs used for distance calculation.
+    batch_size : int, optional
+        Number of rows assigned to one distance-calculation batch. Default is 1024.
 
     Returns
     -------
-    df: pl.DataFrame
-        Polars DataFrame with assigned neighbors and cluster_id columns.
-
-    Notes
-    -----
-    Suggested starting thresholds:
-    - between 0.3 and 0.4
+    pl.DataFrame
+        The input DataFrame with an added integer "Cluster" column.
     """
 
-    if is_pandas := isinstance(df, pd.DataFrame):
-        df = pl.from_pandas(df)
-
-    if id_col not in df.columns:
-        df = df.with_row_index(name=id_col)
+    if fp_col not in df.columns:
+        raise ValueError(
+            f"Fingerprint or embedding column {fp_col} was not found."
+        )
 
     n_samples = len(df)
-    seen = np.zeros(n_samples, dtype=bool)
-    cluster_ids = np.full(n_samples, -1, dtype=int)
+    resolved_n_jobs = effective_n_jobs(n_jobs)
 
-    bit_vectors = embeddings_to_rdkit(df[fp_col].to_numpy())
+    embeddings = [array.reshape(-1) for array in df.get_column(fp_col).to_numpy()]
 
-    batch_indices = list(range(0, n_samples - 1, batch_size)) + [n_samples - 1]
-
-    def compute_neighbors_batch(start_idx, end_idx, _bit_vectors, _threshold):
-
-        distances = []
-
-        for i in range(start_idx, end_idx):
-            row_similarities = DataStructs.BulkTanimotoSimilarity(_bit_vectors[i], _bit_vectors[i + 1:])
-            distances.append((1 - np.array(row_similarities)) <= _threshold)
-
-        return distances
-
-    # Compute neighbors in batches
-    neighbor_batches = Parallel(n_jobs=n_jobs, prefer='processes')(
-        delayed(compute_neighbors_batch)(batch_indices[i], min(batch_indices[i + 1], n_samples - 1), bit_vectors, threshold)
-        for i in range(len(batch_indices) - 1)
+    upper_triu = ds_matrix(
+        array_1=embeddings,
+        array_2=None,
+        metric=metric,
+        n_jobs=resolved_n_jobs,
+        batch_size=batch_size,
+        return_triu=True,
+        threshold=threshold,
     )
 
-    # Combine results into the neighbor mask
-    neighbor_mask = np.zeros((n_samples, n_samples), dtype=bool)
-    row_start = 0
+    neighbour_mask = (
+        upper_triu.astype(bool, copy=False) | upper_triu.T.astype(bool, copy=False)
+    )
 
-    for batch in neighbor_batches:
-        for i, row in enumerate(batch):
-            row_len = len(row)
+    seen = np.zeros(n_samples, dtype=bool)
+    cluster_ids = np.full(n_samples, -1, dtype=np.int64)
 
-            # might be improvable using triu matrix instead
-            neighbor_mask[row_start + i, row_start + i + 1: row_start + i + 1 + row_len] = row
-            neighbor_mask[row_start + i + 1: row_start + i + 1 + row_len, row_start + i] = row  # Symmetric
-        row_start += len(batch)
-
-    df = df.with_columns(pl.Series('neighbors', np.sum(neighbor_mask, axis=1)))
+    neighbour_counts = neighbour_mask.sum(axis=1, dtype=np.int64)
 
     current_cluster_id = 0
 
     while not np.all(seen):
+        unassigned_indices = np.flatnonzero(~seen)
 
-        unassigned_indices = np.where(~seen)[0]
+        candidate_counts = neighbour_counts.copy()
+        candidate_counts[seen] = -1
 
-        if df[unassigned_indices, 'neighbors'].sum() == 0:
+        most_neighbours_idx = int(np.argmax(candidate_counts))
 
-            for idx in unassigned_indices:
-                cluster_ids[idx] = current_cluster_id
-                seen[idx] = True
-                current_cluster_id += 1
+        if candidate_counts[most_neighbours_idx] == 0:
+            cluster_ids[unassigned_indices] = np.arange(
+                current_cluster_id,
+                current_cluster_id + len(unassigned_indices),
+                dtype=np.int64,
+            )
             break
 
-        most_neighbors_idx = unassigned_indices[np.argmax(df[unassigned_indices, 'neighbors'])]
-
-        cluster_members = np.where(neighbor_mask[most_neighbors_idx] & ~seen)[0]
-        cluster_members = np.append(cluster_members, most_neighbors_idx)
+        cluster_members = np.flatnonzero(
+            neighbour_mask[most_neighbours_idx] & ~seen
+        )
+        cluster_members = np.unique(np.append(cluster_members, most_neighbours_idx))
 
         cluster_ids[cluster_members] = current_cluster_id
         seen[cluster_members] = True
 
-        neighbor_mask[cluster_members, :] = False
-        neighbor_mask[:, cluster_members] = False
+        removed_edge_counts = neighbour_mask[:, cluster_members].sum(
+            axis=1,
+            dtype=np.int64,
+        )
 
-        df[np.where(seen == False)[0], 'neighbors'] = np.sum(neighbor_mask[~seen][:, ~seen], axis=1)
+        neighbour_counts -= removed_edge_counts
+        neighbour_counts[seen] = -1
 
         current_cluster_id += 1
 
-    df = df.with_columns(pl.Series('Cluster', cluster_ids)).drop('neighbors')
+    result = df.with_columns(
+        pl.Series("Cluster", cluster_ids)
+    )
 
-    if is_pandas:
-        df = df.to_pandas()
-
-    return df
+    return result
 
 
-def murcko_cluster(df: Union[pd.DataFrame, pl.DataFrame], smiles_col: str = 'SMILES', generic: bool = False):
+def murcko_cluster(df: pl.DataFrame, smiles_col: str = 'SMILES', generic: bool = False):
     """
     Cluster molecules based on their (generic) Murcko Scaffolds. Molecules for which a scaffold cannot be generated
     are assigned to a single cluster.
 
     Parameters
     ----------
-    df: Union[pd.DataFrame, pl.DataFrame]
-        A pandas or polars DataFrame
+    df: pl.DataFrame
+        A polars DataFrame
     smiles_col: str
         A name of the column with SMILES strings.
     generic: bool
@@ -146,7 +130,7 @@ def murcko_cluster(df: Union[pd.DataFrame, pl.DataFrame], smiles_col: str = 'SMI
 
     Returns
     -------
-    df: Union[pd.DataFrame, pl.DataFrame]
+    df: pl.DataFrame
     """
 
     def smiles_2_scaffold(smiles: str) -> str:
@@ -177,19 +161,13 @@ def murcko_cluster(df: Union[pd.DataFrame, pl.DataFrame], smiles_col: str = 'SMI
             print(f"Exception during calculating the scaffold of < {smiles} >\n{e}")
             return "ScaffoldNotGenerated"
 
-    if is_pandas := isinstance(df, pd.DataFrame):
-        df = pl.from_pandas(df)
-
     df = df.with_columns(pl.col(smiles_col).map_elements(
         smiles_2_scaffold, return_dtype=pl.String).alias('Cluster'))
-
-    if is_pandas:
-        df = df.to_pandas()
 
     return df
 
 
-def cc_cluster(df: Union[pd.DataFrame, pl.DataFrame], features_col: str = "ECFP", metric: str = 'jaccard',
+def cc_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = 'jaccard',
                threshold: float = 0.3, n_jobs: int = 1):
     """
     Cluster molecules using connected components graphs.
@@ -197,8 +175,8 @@ def cc_cluster(df: Union[pd.DataFrame, pl.DataFrame], features_col: str = "ECFP"
     Parameters
     ----------
 
-    df: Union[pd.DataFrame, pl.DataFrame]
-        A pandas or polars DataFrame
+    df: pl.DataFrame
+        A polars DataFrame
     features_col: str
         Name of the column with fingerprints. Default is ECFP
     metric: str, optional
@@ -211,11 +189,8 @@ def cc_cluster(df: Union[pd.DataFrame, pl.DataFrame], features_col: str = "ECFP"
 
     Returns
     -------
-    df: Union[pd.DataFrame, pl.DataFrame]
+    df: pl.DataFrame
     """
-
-    if is_pandas := isinstance(df, pd.DataFrame):
-        df = pl.from_pandas(df)
 
     array = np.vstack(df[features_col].to_numpy())
     dist_matrix = distance_matrix(array_1=array, array_2=array, metric=metric, n_jobs=n_jobs)
@@ -223,8 +198,5 @@ def cc_cluster(df: Union[pd.DataFrame, pl.DataFrame], features_col: str = "ECFP"
     n_components, labels = connected_components(adj_sparse, directed=False, return_labels=True)
 
     df = df.with_columns(pl.Series('Cluster', labels))
-
-    if is_pandas:
-        df = df.to_pandas()
 
     return df
