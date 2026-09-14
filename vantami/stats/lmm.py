@@ -57,7 +57,7 @@ def check_effects(df: pl.DataFrame, fixed_effects: Union[str, List[str]], random
         Assign a coverage category according to the supplied thresholds.
         """
         if value < min_value:
-            return "Drop"
+            return "Insufficient"
         elif value < suff_value:
             return "Minimal"
         elif value < adeq_value:
@@ -65,7 +65,7 @@ def check_effects(df: pl.DataFrame, fixed_effects: Union[str, List[str]], random
         return "Adequate"
 
     outcome_rank = {
-        "Drop": 0,
+        "Insufficient": 0,
         "Minimal": 1,
         "Sufficient": 2,
         "Adequate": 3,
@@ -94,7 +94,7 @@ def check_effects(df: pl.DataFrame, fixed_effects: Union[str, List[str]], random
     summary_rows = []
 
     for fix_ef in fixed_effects:
-        fix_ef_n_none = df[fix_ef].is_null().sum()
+        fix_ef_n_none = float(df[fix_ef].is_null().sum())
         fix_ef_frac_unk = round_to_significant(fix_ef_n_none / n_total, 3)
 
         df_known = df.filter(pl.col(fix_ef).is_not_null())
@@ -134,7 +134,7 @@ def check_effects(df: pl.DataFrame, fixed_effects: Union[str, List[str]], random
             )
 
             random_outcomes = {
-                f"{random_effect}_outcome": classify_value(
+                f"{random_effect}": classify_value(
                     value=random_count,
                     min_value=config.min_random,
                     suff_value=config.suff_random,
@@ -158,11 +158,11 @@ def check_effects(df: pl.DataFrame, fixed_effects: Union[str, List[str]], random
                 check_name for check_name, check_outcome in checks if check_outcome == outcome
             ]
 
-            if outcome == "Drop":
+            if outcome == "Insufficient":
                 reason = f"Failed: {'|'.join(limiting_checks)}"
 
             elif outcome == "Minimal":
-                reason = f"Limiting: {outcome} ({'|'.join(limiting_checks)})"
+                reason = f"Minimal: {'|'.join(limiting_checks)}"
                 valid_levels.append(level)
 
             else:
@@ -185,11 +185,11 @@ def check_effects(df: pl.DataFrame, fixed_effects: Union[str, List[str]], random
         n_valid = len(valid_levels)
 
         if n_valid == 0:
-            fix_ef_outcome = "Drop"
+            fix_ef_outcome = "Insufficient"
             fix_ef_reason = "No valid levels"
 
         elif n_valid == 1:
-            fix_ef_outcome = "Drop"
+            fix_ef_outcome = "Insufficient"
             fix_ef_reason = "Only one valid level"
 
         else:
