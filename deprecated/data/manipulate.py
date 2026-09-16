@@ -8,33 +8,6 @@ import polars as pl
 from rdkit import DataStructs
 
 
-def bin_data(data: Iterable[float], n_bins: int = 5):
-    """
-    Assign entries in data into bins.
-
-    Parameters
-    ----------
-    data: Iterable[float]
-        E.g. list, 1D np.array, pd/pl.Series
-    n_bins: int
-        Into how many bins data should be assigned
-
-    Returns
-    -------
-    bins: List[int]
-    """
-    quantiles = list(np.quantile(data, q=np.linspace(0, 1, n_bins+1)[1:-1]))
-
-    def to_bin(value: float, qnts: List[float]):
-        for idx, quantile in enumerate(qnts):
-            if value < quantile:
-                return idx + 1
-        return len(quantiles) + 1
-
-    bins = [to_bin(value, qnts=quantiles) for value in data]
-    return bins
-
-
 def is_valid_fingerprint(fingerprint: np.ndarray) -> bool:
     """
     Check if numpy array contains only [0,1] values
