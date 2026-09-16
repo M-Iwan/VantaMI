@@ -17,7 +17,7 @@
 - Updated the Butina Clustering implementation
 
 [Removed]
-- data.manipualte module in lieu of automated embedding conversions
+- data.manipulate module in lieu of automated embedding conversions
 
 # [0.4.3]: 03-09-2026
 [Added]
