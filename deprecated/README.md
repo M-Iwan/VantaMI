@@ -8,6 +8,4 @@ primary supported API.
 - ``deep/gnn_regressor.py`` — standalone GNN regressor with duplicated training helpers; prefer ``novami.deep.models.TestModel`` (:class:`MMTUnit`).
 - ``deep/model.py`` — older CRN / MMGNN / MMWGNN experiments.
 - ``deep/mmmtgnn.py`` — MMMTGNN and modality backbones (moved from ``novami.deep.model``).
-
-Imports use the ``deprecated`` package (install the repo in editable mode so the
-package root is on ``PYTHONPATH``).
+- ``data/manipulate.py``

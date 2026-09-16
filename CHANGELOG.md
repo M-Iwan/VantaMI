@@ -1,3 +1,24 @@
+# [0.4.4]: 16-09-2026
+[Added]
+- Efficient implementation of pairwise-distance calculations, with automated backend selection (RDKit/SciPy)
+- Support for dense distance matrices, thresholded neighborhood matrices, and sparse distance graphs
+- New clustering methods:
+  - DBSCAN
+  - HDBSCAN
+  - Agglomerative
+  - Spectral
+  - OPTICS
+  - KMeans
+- Random- and fixed-effects checks for Linear Mixed Models
+
+[Changed]
+- Standardized and cleaned up public APIs for descriptor calculations
+- Moved bin_data from data.manipulation to data.partition
+- Updated the Butina Clustering implementation
+
+[Removed]
+- data.manipulate module in lieu of automated embedding conversions
+
 # [0.4.3]: 03-09-2026
 [Added]
 - PyPI release

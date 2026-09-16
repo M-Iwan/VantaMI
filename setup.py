@@ -10,7 +10,7 @@ package_data: dict[str, list[str]] = {
 
 setup(
     name="vantami",
-    version="0.4.3",
+    version="0.4.4",
     author="Mateusz Iwan",
     author_email="mateusz.iwan@hotmail.com",
     description="A collection of ML/AI tools for chemistry applications.",
