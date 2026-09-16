@@ -334,6 +334,7 @@ def hdbscan_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = 
         "min_cluster_size": 5,
         "alpha": 1.0,
         "cluster_selection_method": "eom",
+        "copy": False
     }
 
     reserved_kwargs = {
@@ -474,9 +475,9 @@ def spectral_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str =
 
     try:
         from sklearn.cluster import SpectralClustering
-        from sklearn.neighbors import sort_graph_by_row_values
+        from scipy.sparse import csr_matrix
     except ImportError as exc:
-        raise ImportError(f"Function < spectral_cluster > requires sklearn:\n{exc}")
+        raise ImportError(f"Function < spectral_cluster > requires sklearn and scipy:\n{exc}")
 
     if (n_samples := len(df)) == 0:
         raise ValueError(f"Input DataFrame is empty.")
@@ -499,7 +500,7 @@ def spectral_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str =
 
         default_kwargs.update(kwargs)
 
-    distances = distance_matrix(
+    affinity = distance_matrix(
         array_1=_to_arrays(df, features_col),
         array_2=None,
         metric=metric,
@@ -510,26 +511,29 @@ def spectral_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str =
         return_sparse=True
     )
 
-    zero_distances = distances.data == 0.0
+    affinity.data = 1.0 - affinity.data
 
-    if np.any(zero_distances):
-        distances.data[zero_distances] = np.nextafter(0.0, 1.0)
+    affinity.setdiag(1.0)
+    affinity.eliminate_zeros()
 
-    distances.sort_indices()
-    distances = sort_graph_by_row_values(
-        distances,
-        copy=False,
-        warn_when_not_sorted=False,
+    # current sklearn expectations
+    affinity = csr_matrix(
+        (
+            affinity.data,
+            affinity.indices.astype(np.int32, copy=False),
+            affinity.indptr.astype(np.int32, copy=False),
+        ),
+        shape=affinity.shape
     )
 
     model = SpectralClustering(
-        affinity="precomputed_nearest_neighbors",
+        affinity="precomputed",
         n_jobs=n_jobs,
         n_clusters=n_clusters,
         **default_kwargs
     )
 
-    labels = model.fit_predict(distances)
+    labels = model.fit_predict(affinity)
 
     return df.with_columns(pl.Series('Cluster', labels))
 
