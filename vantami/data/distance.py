@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, List, Dict, Sequence, Union
+from typing import Optional, Tuple, List, Sequence, Union, Iterable
 from joblib import Parallel, delayed
 from itertools import chain
 
@@ -7,6 +7,8 @@ import numpy.typing as npt
 import polars as pl
 
 from scipy.spatial.distance import cdist
+from scipy.sparse import coo_array, csr_array
+
 from rdkit import DataStructs
 from rdkit.DataStructs.cDataStructs import ExplicitBitVect
 
@@ -52,10 +54,7 @@ def _convert_embeddings(array: Union[npt.NDArray, Iterable[npt.NDArray]], metric
     Union[npt.NDArray, ExplicitBitVect, List[npt.NDArray], List[ExplicitBitVect]]
     """
 
-    rdkit_metrics = {
-        "jaccard", "braunblanquet", "dice", "kulczynski",
-        "mcconnaughey", "rogotgoldberg", "russel", "sokal",
-    }
+    rdkit_metrics = set(rdkit_similarity_functions.keys())
 
     other_metrics = {
         "euclidean", "minkowski", "cityblock", "seuclidean",
@@ -91,7 +90,7 @@ def _convert_embeddings(array: Union[npt.NDArray, Iterable[npt.NDArray]], metric
     if isinstance(array, np.ndarray):
         return to_explicit_bitvect(array)
 
-    if isinstance(array, list):
+    if isinstance(array, Sequence) and not isinstance(array, (str, bytes)):
         if not all(isinstance(item, np.ndarray) for item in array):
             raise TypeError("Expected every item in array to be a NumPy array.")
 
@@ -169,6 +168,109 @@ def _scipy_rect_b(query_array: npt.NDArray, ref_array: npt.NDArray, metric: str,
         distances = (distances <= threshold).astype(np.uint8)
 
     return batch_idx, distances
+
+
+def _rdkit_sparse_triu_b(array: Sequence[ExplicitBitVect], metric: str, threshold: float,
+                          start_idx: int, end_idx: int):
+    """
+    Calculate thresholded strict upper-triangular RDKit distance edges.
+    """
+    similarity_fn = rdkit_similarity_functions[metric]
+
+    rows, cols, data = [], [], []
+
+    for i in range(start_idx, end_idx):
+        distances = 1.0 - np.asarray(similarity_fn(array[i], array[i + 1:]), dtype=np.float64)
+
+        local_cols = np.flatnonzero(distances <= threshold)
+
+        if local_cols.size == 0:
+            continue
+
+        rows.append(np.full(local_cols.size, i, dtype=np.int64))
+        cols.append(local_cols.astype(np.int64) + i + 1)
+        data.append(distances[local_cols])
+
+    if not rows:
+        return (start_idx, np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float64))
+
+    return (start_idx, np.concatenate(rows), np.concatenate(cols), np.concatenate(data))
+
+
+def _rdkit_sparse_rect_b(query_array: Sequence[ExplicitBitVect], ref_array: Sequence[ExplicitBitVect],
+                         metric: str, threshold: float, batch_idx: int, row_start_idx: int):
+    """
+    Calculate thresholded RDKit distance edges for one rectangular block.
+    """
+    similarity_fn = rdkit_similarity_functions[metric]
+
+    rows, cols, data = [], [], []
+
+    for local_row_idx, fingerprint in enumerate(query_array):
+        distances = 1.0 - np.asarray(similarity_fn(fingerprint, ref_array), dtype=np.float64)
+
+        matching_cols = np.flatnonzero(distances <= threshold)
+
+        if matching_cols.size == 0:
+            continue
+
+        rows.append(np.full(matching_cols.size, row_start_idx + local_row_idx, dtype=np.int64))
+        cols.append(matching_cols.astype(np.int64))
+        data.append(distances[matching_cols])
+
+    if not rows:
+        return (batch_idx, np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float64))
+
+    return (batch_idx, np.concatenate(rows), np.concatenate(cols), np.concatenate(data))
+
+
+def _scipy_sparse_triu_b(array: npt.NDArray, metric: str, threshold: float, start_idx: int, end_idx: int):
+    """
+    Calculate thresholded strict upper-triangular SciPy distance edges.
+    """
+    distances = cdist(XA=array[start_idx:end_idx], XB=array[start_idx + 1:], metric=metric)
+
+    local_rows, local_cols = np.nonzero(distances <= threshold)
+
+    valid_indices = local_cols >= local_rows
+
+    local_rows = local_rows[valid_indices]
+    local_cols = local_cols[valid_indices]
+
+    return (
+        start_idx, local_rows.astype(np.int64) + start_idx,
+        local_cols.astype(np.int64) + start_idx + 1, distances[local_rows, local_cols],
+    )
+
+
+def _scipy_sparse_rect_b(query_array: npt.NDArray, ref_array: npt.NDArray, metric: str,
+                         threshold: float, batch_idx: int, row_start_idx: int):
+    """
+    Calculate thresholded SciPy distance edges for one rectangular block.
+    """
+    distances = cdist(XA=query_array, XB=ref_array, metric=metric)
+
+    local_rows, cols = np.nonzero(distances <= threshold)
+
+    return (
+        batch_idx, local_rows.astype(np.int64) + row_start_idx,
+        cols.astype(np.int64), distances[local_rows, cols]
+    )
+
+
+def _sparse_distance_graph(rows: npt.NDArray, cols: npt.NDArray, data: npt.NDArray, shape: Tuple[int, int],
+                           self_comparison: bool, return_triu: bool):
+    """
+    Construct a CSR sparse distance graph from row, column, distance triplets.
+    """
+    if self_comparison and not return_triu:
+        rows, cols, data = (
+            np.concatenate([rows, cols]),
+            np.concatenate([cols, rows]),
+            np.concatenate([data, data]),
+        )
+
+    return coo_array((data, (rows, cols)), shape=shape, dtype=np.float64).tocsr()
 
 
 def _as_rdkit_array(values: EmbeddingSequence, metric: str):
@@ -254,12 +356,7 @@ def _reduce_k_neighbors_block(distances: npt.NDArray, max_nearest_k: int, max_fu
     nearest_distances = _k_smallest_rows(distances, k=max_nearest_k)
     furthest_distances = _k_largest_rows(distances, k=max_furthest_k)
 
-    return (
-        distance_sums,
-        distance_counts,
-        nearest_distances,
-        furthest_distances,
-    )
+    return (distance_sums, distance_counts, nearest_distances, furthest_distances)
 
 
 def _rdkit_k_neighbors_block(query_array: Sequence[ExplicitBitVect], ref_array: Sequence[ExplicitBitVect],
@@ -290,13 +387,7 @@ def _rdkit_k_neighbors_block(query_array: Sequence[ExplicitBitVect], ref_array: 
                                   max_furthest_k=max_furthest_k,
     ))
 
-    return (
-        batch_idx,
-        distance_sums,
-        distance_counts,
-        nearest_distances,
-        furthest_distances,
-    )
+    return (batch_idx, distance_sums, distance_counts, nearest_distances, furthest_distances)
 
 
 def _scipy_k_neighbors_block(query_array: npt.NDArray, ref_array: npt.NDArray, metric: str, self_comparison: bool,
@@ -319,13 +410,7 @@ def _scipy_k_neighbors_block(query_array: npt.NDArray, ref_array: npt.NDArray, m
             max_furthest_k=max_furthest_k,
     ))
 
-    return (
-        batch_idx,
-        distance_sums,
-        distance_counts,
-        nearest_distances,
-        furthest_distances,
-    )
+    return (batch_idx, distance_sums, distance_counts, nearest_distances, furthest_distances)
 
 
 """
@@ -334,12 +419,12 @@ Main functions
 
 
 def distance_matrix(array_1: EmbeddingSequence, array_2: Optional[EmbeddingSequence] = None, metric: str = "jaccard",
-                    n_jobs: int = 1, batch_size: int = 1024, return_triu: bool = True, threshold: Optional[float] = None):
+                    n_jobs: int = 1, batch_size: int = 1024, return_triu: bool = False, return_sparse: bool = False,
+                    threshold: Optional[float] = None):
     """
-    Compute an exact pairwise distance or binary neighbourhood matrix.
+    Compute an exact pairwise distance, binary neighborhood matrix, or sparse thresholded distance graph.
 
-    RDKit is used for operations on binary vectors.
-    Other metrics are passed to scipy.spatial.distance.cdist.
+    RDKit is used for operations on binary vectors. Other metrics are passed to scipy.spatial.distance.cdist.
 
     Parameters
     ----------
@@ -358,62 +443,127 @@ def distance_matrix(array_1: EmbeddingSequence, array_2: Optional[EmbeddingSeque
         Number of rows processed in each work block. Default is 1024.
     return_triu: bool, optional
         If True, return only the strict upper triangle. The diagonal and lower triangle are zero.
-        Relevant only when array_2 is None.
+        Relevant only when array_2 is None. Default is False.
+    return_sparse: bool, optional
+        If True, return a scipy.sparse.csr_array containing only distances less
+        than or equal to threshold. Stored values are actual distances, not
+        binary neighborhood values. Requires threshold to be provided. Default is False.
     threshold : float | None, optional
         If numeric, return a uint8 binary neighborhood matrix in which a pair is 1 when
         its distance is less than or equal to threshold, otherwise 0. If None, return float64 distances.
 
     Returns
     -------
-    numpy.ndarray
-        Distance matrix or binary neighborhood matrix.
-
-        For self-comparison with return_triu=True, only positions where
-        i < j are populated.
-
-        For rectangular comparisons, return_triu does not apply and a full
-        matrix is returned.
+    numpy.ndarray or scipy.sparse.csr_array
+        Distance matrix, binary neighborhood matrix, or sparse thresholded distance graph.
     """
 
     if not isinstance(array_1, Sequence):
-        raise TypeError(
-            f"Expected array_1 to be a sequence of NumPy arrays or ExplicitBitVect objects, "
-            f"got {type(array_1)} instead."
-        )
+        raise TypeError(f"Expected array_1 to be a {Sequence}, got {type(array_1)} instead.")
 
     if array_2 is not None and not isinstance(array_2, Sequence):
-        raise TypeError(
-            "Expected array_2 to be a sequence of NumPy arrays, ExplicitBitVect objects, or None; "
-            f"got {type(array_2)} instead."
-        )
+        raise TypeError(f"Expected array_2 to be a {Sequence}, got {type(array_2)} instead.")
 
-    if batch_size < 1:
-        raise ValueError(f"Expected batch_size to be at least 1, got {batch_size} instead.")
+    if threshold is not None:
+        if not isinstance(threshold, (int, float, np.number)):
+            raise TypeError(f"Expected threshold to be numeric or None, got {type(threshold)} instead.")
+
+    if return_sparse and threshold is None:
+        raise ValueError("Expected threshold to be provided when return_sparse=True.")
 
     if (self_comparison := array_2 is None):
         array_2 = array_1
 
     output_dtype = np.uint8 if threshold is not None else np.float64
-
     similarity_fn = rdkit_similarity_functions.get(metric)
 
     # RDKit path
     if similarity_fn is not None:
-        fingerprints_1 = _as_rdkit_array(
-            array_1,
-            metric=metric,
-        )
+        array_1 = _as_rdkit_array(array_1, metric=metric)
 
-        fingerprints_2 = (
-            fingerprints_1 if self_comparison
+        array_2 = (
+            array_1 if self_comparison
             else _as_rdkit_array(array_2, metric=metric)
         )
 
-        if (n_rows := len(fingerprints_1)) == 0:
+        n_rows = len(array_1)
+        n_cols = len(array_2)
+
+        if n_rows == 0:
+            if return_sparse:
+                return csr_array((0, n_cols), dtype=np.float64)
+
             return np.empty((0, n_cols), dtype=output_dtype)
 
-        if (n_cols := len(fingerprints_2)) == 0:
+        if n_cols == 0:
+            if return_sparse:
+                return csr_array((n_rows, 0), dtype=np.float64)
+
             return np.empty((n_rows, 0), dtype=output_dtype)
+
+        # Sparse self-comparison path
+        if return_sparse and self_comparison:
+            if n_rows < 2:
+                return csr_array((n_rows, n_rows), dtype=np.float64)
+
+            chunks = Parallel(n_jobs=n_jobs, backend="loky")(
+                delayed(_rdkit_sparse_triu_b)(
+                    array=array_1,
+                    metric=metric,
+                    threshold=threshold,
+                    start_idx=start_idx,
+                    end_idx=min(start_idx + batch_size, n_rows - 1),
+                )
+                for start_idx in range(0, n_rows - 1, batch_size)
+            )
+
+            chunks = sorted(chunks, key=lambda chunk: chunk[0])
+
+            rows = np.concatenate([chunk[1] for chunk in chunks])
+            cols = np.concatenate([chunk[2] for chunk in chunks])
+            data = np.concatenate([chunk[3] for chunk in chunks])
+
+            return _sparse_distance_graph(
+                rows=rows,
+                cols=cols,
+                data=data,
+                shape=(n_rows, n_rows),
+                self_comparison=True,
+                return_triu=return_triu,
+            )
+
+        # Sparse rectangular path
+        if return_sparse:
+            batches = [(batch_idx, start_idx, array_1[start_idx:start_idx + batch_size])
+                        for batch_idx, start_idx in enumerate(range(0, n_rows, batch_size))
+            ]
+
+            chunks = Parallel(n_jobs=n_jobs, backend="loky")(
+                delayed(_rdkit_sparse_rect_b)(
+                    query_array=batch,
+                    ref_array=array_2,
+                    metric=metric,
+                    threshold=threshold,
+                    batch_idx=batch_idx,
+                    row_start_idx=start_idx,
+                )
+                for batch_idx, start_idx, batch in batches
+            )
+
+            chunks = sorted(chunks, key=lambda chunk: chunk[0])
+
+            rows = np.concatenate([chunk[1] for chunk in chunks])
+            cols = np.concatenate([chunk[2] for chunk in chunks])
+            data = np.concatenate([chunk[3] for chunk in chunks])
+
+            return _sparse_distance_graph(
+                rows=rows,
+                cols=cols,
+                data=data,
+                shape=(n_rows, n_cols),
+                self_comparison=False,
+                return_triu=False,
+            )
 
         # Self-comparison path; upper triu by default
         if self_comparison:
@@ -424,7 +574,7 @@ def distance_matrix(array_1: EmbeddingSequence, array_2: Optional[EmbeddingSeque
 
             batches = Parallel(n_jobs=n_jobs, backend="loky")(
                 delayed(_rdkit_triu_b)(
-                    array=fingerprints_1,
+                    array=array_1,
                     metric=metric,
                     threshold=threshold,
                     start_idx=start_idx,
@@ -442,16 +592,16 @@ def distance_matrix(array_1: EmbeddingSequence, array_2: Optional[EmbeddingSeque
 
             return result
 
-        # rectangular matrix if array_2 is not None
+        # Rectangular matrix if array_2 is not None
         batches = [
-            (batch_idx, fingerprints_1[start_idx:start_idx + batch_size])
+            (batch_idx, array_1[start_idx:start_idx + batch_size])
             for batch_idx, start_idx in enumerate(range(0, n_rows, batch_size))
         ]
 
         chunks = Parallel(n_jobs=n_jobs, backend="loky")(
             delayed(_rdkit_rect_b)(
                 query_array=batch,
-                ref_array=fingerprints_2,
+                ref_array=array_2,
                 metric=metric,
                 threshold=threshold,
                 batch_idx=batch_idx,
@@ -459,29 +609,94 @@ def distance_matrix(array_1: EmbeddingSequence, array_2: Optional[EmbeddingSeque
             for batch_idx, batch in batches
         )
 
-        return np.vstack(
-            [
-                block
-                for _, block in sorted(
-                    chunks,
-                    key=lambda chunk: chunk[0],
-                )
-            ]
-        )
+        return np.vstack([block for _, block in sorted(chunks, key=lambda chunk: chunk[0])])
 
-    # Scipy path
+    # SciPy path
     array_1 = _as_numpy_matrix(array_1, "array_1")
 
-    array_2 = (array_1 if self_comparison else _as_numpy_matrix(array_2, "array_2"))
+    array_2 = array_1 if self_comparison else _as_numpy_matrix(array_2, "array_2")
 
-    if (n_rows := array_1.shape[0]) == 0:
+    n_rows = array_1.shape[0]
+    n_cols = array_2.shape[0]
+
+    if n_rows == 0:
+        if return_sparse:
+            return csr_array((0, n_cols), dtype=np.float64)
+
         return np.empty((0, n_cols), dtype=output_dtype)
 
-    if (n_cols := array_2.shape[0]) == 0:
+    if n_cols == 0:
+        if return_sparse:
+            return csr_array((n_rows, 0), dtype=np.float64)
+
         return np.empty((n_rows, 0), dtype=output_dtype)
 
     if array_1.shape[1] != array_2.shape[1]:
         raise ValueError("Embeddings in array_1 and array_2 must have the same length.")
+
+    # Sparse self-comparison path
+    if return_sparse and self_comparison:
+        if n_rows < 2:
+            return csr_array((n_rows, n_rows), dtype=np.float64)
+
+        chunks = Parallel(n_jobs=n_jobs, backend="loky")(
+            delayed(_scipy_sparse_triu_b)(
+                array=array_1,
+                metric=metric,
+                threshold=threshold,
+                start_idx=start_idx,
+                end_idx=min(start_idx + batch_size, n_rows - 1),
+            )
+            for start_idx in range(0, n_rows - 1, batch_size)
+        )
+
+        chunks = sorted(chunks, key=lambda chunk: chunk[0])
+
+        rows = np.concatenate([chunk[1] for chunk in chunks])
+        cols = np.concatenate([chunk[2] for chunk in chunks])
+        data = np.concatenate([chunk[3] for chunk in chunks])
+
+        return _sparse_distance_graph(
+            rows=rows,
+            cols=cols,
+            data=data,
+            shape=(n_rows, n_rows),
+            self_comparison=True,
+            return_triu=return_triu,
+        )
+
+    # Sparse rectangular path
+    if return_sparse:
+        batches = [(batch_idx, start_idx, array_1[start_idx:start_idx + batch_size])
+                   for batch_idx, start_idx in enumerate(range(0, n_rows, batch_size))
+        ]
+
+        chunks = Parallel(n_jobs=n_jobs, backend="loky")(
+            delayed(_scipy_sparse_rect_b)(
+                query_array=batch,
+                ref_array=array_2,
+                metric=metric,
+                threshold=threshold,
+                batch_idx=batch_idx,
+                row_start_idx=start_idx,
+            )
+            for batch_idx, start_idx, batch in batches
+        )
+
+        chunks = sorted(chunks, key=lambda chunk: chunk[0])
+
+        rows = np.concatenate([chunk[1] for chunk in chunks])
+        cols = np.concatenate([chunk[2] for chunk in chunks])
+        data = np.concatenate([chunk[3] for chunk in chunks])
+
+        return _sparse_distance_graph(
+            rows=rows,
+            cols=cols,
+            data=data,
+            shape=(n_rows, n_cols),
+            self_comparison=False,
+            return_triu=False,
+        )
 
     # "triu"-like calculations
     if self_comparison:
@@ -510,10 +725,9 @@ def distance_matrix(array_1: EmbeddingSequence, array_2: Optional[EmbeddingSeque
 
         return result
 
-    # if array_2 is not None
-    batches = [
-        (batch_idx, array_1[start_idx:start_idx + batch_size])
-        for batch_idx, start_idx in enumerate(range(0, n_rows, batch_size))
+    # Rectangular matrix if array_2 is not None
+    batches = [(batch_idx, array_1[start_idx:start_idx + batch_size])
+               for batch_idx, start_idx in enumerate(range(0, n_rows, batch_size))
     ]
 
     chunks = Parallel(n_jobs=n_jobs, backend="loky")(
@@ -527,9 +741,7 @@ def distance_matrix(array_1: EmbeddingSequence, array_2: Optional[EmbeddingSeque
         for batch_idx, batch in batches
     )
 
-    return np.vstack(
-        [block for _, block in sorted(chunks, key=lambda chunk: chunk[0])]
-    )
+    return np.vstack([block for _, block in sorted(chunks, key=lambda chunk: chunk[0])])
 
 
 def k_neighbors_distance(query_array: EmbeddingSequence, ref_array: Optional[EmbeddingSequence] = None,
@@ -739,17 +951,16 @@ def group_k_neighbors_distance(df: pl.DataFrame, features_col: str, group_col: s
         raise KeyError(f"Missing required columns: {missing_columns}.")
 
     group_type = df[group_col].dtype
+    single_assignment_dtypes = {pl.Int32, pl.Int64, pl.String}
 
     # Assume each entry belongs to a single group
-    if isinstance(group_type, (pl.Int32, pl.Int64, pl.String)):
+    if group_type in single_assignment_dtypes:
         unique_groups = df[group_col].drop_nulls().unique().to_list()
-        print(f"Group column treated a Single-assignment")
         group_type = 'Single'
 
     # Assume each entry *might* belong to multiple groups
-    elif isinstance(group_type, pl.List):
-        unique_groups = set(chain.from_iterable(df[group_col].drop_nulls().unique().to_list()))
-        print(f"Group column treated a Multiple-assignment")
+    elif group_type == pl.List:
+        unique_groups = sorted(chain.from_iterable(df[group_col].drop_nulls().unique().to_list()))
         group_type = 'Multiple'
 
     else:
@@ -940,7 +1151,7 @@ def string_distance(string_1, string_2, method: str = 'levenshtein'):
         import Levenshtein
         from rapidfuzz import fuzz
     except ImportError:
-        raise ImportError("Function < dict_similarity > requires < Levenshtein > and < rapidfuzz > libraries."
+        raise ImportError("Function < string_distance > requires < Levenshtein > and < rapidfuzz > libraries."
                           "Please install them using < pip install Levenshtein rapidfuzz >")
 
     if not all([isinstance(string_1, str), isinstance(string_2, str)]):
