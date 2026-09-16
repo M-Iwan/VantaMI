@@ -44,7 +44,7 @@ def _prepare_batches(df: pl.DataFrame, smiles_col: str, n_jobs: int, batch_size:
 
 def _to_murcko(smiles: str, generic: bool, mod):
     """
-    Convert a single SMILES to Murcko scaffold
+    Convert a single SMILES to Murcko scaffold.
     """
     if (mol := _to_mol(smiles)) is None:
         print(f"Unable to construct valid molecule from {smiles}")
@@ -55,7 +55,9 @@ def _to_murcko(smiles: str, generic: bool, mod):
     if generic:
         scaffold = mod.MakeScaffoldGeneric(scaffold)
 
-    return Chem.MolToSmiles(scaffold)
+    scaffold = Chem.MolToSmiles(scaffold)
+
+    return None if scaffold == "" else scaffold
 
 
 def smiles_2_murcko(smiles: Union[str, List[str], npt.NDArray[str]], generic: bool = False):

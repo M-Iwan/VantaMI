@@ -1,11 +1,22 @@
-from typing import Union
-from joblib import Parallel, delayed
-
 import numpy as np
 import polars as pl
 
-from rdkit import DataStructs, Chem
 from vantami.data.distance import distance_matrix
+
+
+def _to_arrays(df: pl.DataFrame, features_col: str):
+    """
+    Convert polars Series to list of numpy arrays
+    """
+    if features_col not in df.columns:
+        raise ValueError(f"Features column {features_col} was not found.")
+
+    features = df[features_col].to_numpy()
+
+    if any(array is None for array in features):
+        raise ValueError(f"Features column {features_col} contains null values.")
+
+    return [array.reshape(-1) for array in features]
 
 
 def butina_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = "jaccard",
@@ -35,13 +46,13 @@ def butina_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = "
         The input DataFrame with an added integer "Cluster" column.
     """
 
-    if features_col not in df.columns:
-        raise ValueError(f"Features column {features_col} was not found.")
-
-    n_samples = len(df)
+    if (n_samples := len(df)) == 0:
+        raise ValueError(f"Input DataFrame is empty.")
+    if n_samples == 1:
+        return df.with_columns(pl.lit(0).alias("Cluster"))
 
     neighbor_mask = distance_matrix(
-        array_1=[a.reshape(-1) for a in df[features_col].to_numpy()],
+        array_1=_to_arrays(df, features_col),
         array_2=None,
         metric=metric,
         n_jobs=n_jobs,
@@ -112,13 +123,27 @@ def murcko_cluster(df: pl.DataFrame, smiles_col: str = 'SMILES', generic: bool =
     -------
     df: pl.DataFrame
     """
+
     try:
         from vantami.data.descriptors import dataframe_2_murcko
     except ImportError as exc:
         raise ImportError(f"Function < murcko_cluster > requires RDKit:\n{exc}")
 
-    df = dataframe_2_murcko(df, smiles_col=smiles_col, generic=generic, n_jobs=1)
-    df = df.join(df[["Scaffold"]].unique().with_row_index(name="Cluster"), on="Scaffold", how="left")
+    if (n_samples := len(df)) == 0:
+        raise ValueError(f"Input DataFrame is empty.")
+    if n_samples == 1:
+        return df.with_columns(pl.lit(0).alias("Cluster"))
+
+    df = dataframe_2_murcko(
+        df=df,
+        smiles_col=smiles_col,
+        output_col="Murcko",
+        generic=generic,
+        n_jobs=1)
+
+    m_df = df.select("Murcko").drop_nulls().unique().sort("Murcko").with_row_index(name="Cluster")
+    df = df.join(m_df, on="Murcko", how="left")
+    df = df.with_columns(pl.col("Cluster").fill_null(-1).cast(pl.Int64))
 
     return df
 
@@ -151,11 +176,16 @@ def cc_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = 'jacc
 
     try:
         from scipy.sparse.csgraph import connected_components
-    except ImportError:
-        raise ImportError("Function < cc_cluster > requires scipy")
+    except ImportError as exc:
+        raise ImportError(f"Function < cc_cluster > requires scipy:\n{exc}")
+
+    if (n_samples := len(df)) == 0:
+        raise ValueError(f"Input DataFrame is empty.")
+    if n_samples == 1:
+        return df.with_columns(pl.lit(0).alias("Cluster"))
 
     adj_sparse = distance_matrix(
-        array_1=[a.reshape(-1) for a in df[features_col].to_numpy()],
+        array_1=_to_arrays(df, features_col),
         array_2=None,
         metric=metric,
         n_jobs=n_jobs,
@@ -165,7 +195,9 @@ def cc_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = 'jacc
         threshold=threshold
     )
 
-    n_components, labels = connected_components(adj_sparse, directed=False, return_labels=True)
+    adj_sparse.data = np.ones_like(adj_sparse.data, dtype=np.uint8)
+
+    _, labels = connected_components(adj_sparse, directed=False, return_labels=True)
 
     return df.with_columns(pl.Series('Cluster', labels))
 
@@ -201,8 +233,13 @@ def dbscan_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = '
     try:
         from sklearn.cluster import DBSCAN
         from sklearn.neighbors import sort_graph_by_row_values
-    except ImportError:
-        raise ImportError("Function < dbscan_cluster > requires sklearn")
+    except ImportError as exc:
+        raise ImportError(f"Function < dbscan_cluster > requires sklearn:\n{exc}")
+
+    if (n_samples := len(df)) == 0:
+        raise ValueError(f"Input DataFrame is empty.")
+    if n_samples == 1:
+        return df.with_columns(pl.lit(0).alias("Cluster"))
 
     default_kwargs = {
         "min_samples": 5
@@ -220,7 +257,7 @@ def dbscan_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = '
         default_kwargs.update(kwargs)
 
     distances = distance_matrix(
-        array_1=[a.reshape(-1) for a in df[features_col].to_numpy()],
+        array_1=_to_arrays(df, features_col),
         array_2=None,
         metric=metric,
         n_jobs=n_jobs,
@@ -235,7 +272,9 @@ def dbscan_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = '
     if np.any(zero_distances):
         distances.data[zero_distances] = np.nextafter(0.0, 1.0)
 
+    distances.setdiag(np.nextafter(0.0, 1.0))
     distances.sort_indices()
+
     distances = sort_graph_by_row_values(
         distances,
         copy=False,
@@ -254,7 +293,7 @@ def dbscan_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = '
 
 
 def hdbscan_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = 'jaccard', n_jobs: int = 1,
-                    batch_size: int = 1024, threshold: float = 0.3, hdbscan_kwargs: dict = None):
+                    batch_size: int = 1024, threshold: float = 0.3, kwargs: dict = None):
     """
     Cluster molecules using the HDBSCAN approach.
 
@@ -273,7 +312,7 @@ def hdbscan_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = 
         Number of rows to process within a batch. Default is 1024.
     threshold: float
         Distance threshold. Edge is set if distance <= threshold. Default is 0.3
-    hdbscan_kwargs: dict
+    kwargs: dict
         Additional keyword arguments passed to HDBSCAN
 
     Returns
@@ -283,9 +322,13 @@ def hdbscan_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = 
 
     try:
         from sklearn.cluster import HDBSCAN
-        from sklearn.neighbors import sort_graph_by_row_values
-    except ImportError:
-        raise ImportError("Function < hdbscan_cluster > requires sklearn")
+    except ImportError as exc:
+        raise ImportError(f"Function < hdbscan_cluster > requires sklearn:\n{exc}")
+
+    if (n_samples := len(df)) == 0:
+        raise ValueError(f"Input DataFrame is empty.")
+    if n_samples == 1:
+        return df.with_columns(pl.lit(0).alias("Cluster"))
 
     default_kwargs = {
         "min_cluster_size": 5,
@@ -305,7 +348,7 @@ def hdbscan_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = 
         default_kwargs.update(kwargs)
 
     distances = distance_matrix(
-        array_1=[a.reshape(-1) for a in df[features_col].to_numpy()],
+        array_1=_to_arrays(df, features_col),
         array_2=None,
         metric=metric,
         n_jobs=n_jobs,
@@ -354,10 +397,17 @@ def agglomerative_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: 
 
     try:
         from sklearn.cluster import AgglomerativeClustering
-    except ImportError:
-        raise ImportError("Function < agglomerative_cluster > requires sklearn")
+    except ImportError as exc:
+        raise ImportError(f"Function < agglomerative_cluster > requires sklearn:\n{exc}")
 
-    default_kwargs = {}
+    if (n_samples := len(df)) == 0:
+        raise ValueError(f"Input DataFrame is empty.")
+    if n_samples == 1:
+        return df.with_columns(pl.lit(0).alias("Cluster"))
+
+    default_kwargs = {
+        "linkage": "average"
+    }
 
     reserved_kwargs = {
         "n_clusters",
@@ -372,7 +422,7 @@ def agglomerative_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: 
         default_kwargs.update(kwargs)
 
     distances = distance_matrix(
-        array_1=[a.reshape(-1) for a in df[features_col].to_numpy()],
+        array_1=_to_arrays(df, features_col),
         array_2=None,
         metric=metric,
         n_jobs=n_jobs,
@@ -393,7 +443,7 @@ def agglomerative_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: 
 
 
 def spectral_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = 'jaccard', n_jobs: int = 1,
-                     batch_size: int = 1024, threshold: float = 0.3, n_clusters: int = None, kwargs: dict = None):
+                     batch_size: int = 1024, threshold: float = 0.3, n_clusters: int = 2, kwargs: dict = None):
     """
     Cluster molecules using the spectral clustering approach.
 
@@ -413,7 +463,7 @@ def spectral_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str =
     threshold: float
         Distance threshold. Edge is set if distance <= threshold. Default is 0.3
     n_clusters: int
-        Number of clusters to assign.
+        Number of clusters to assign. Default is 2
     kwargs: dict
         Additional keyword arguments passed to SpectralClustering.
 
@@ -424,8 +474,14 @@ def spectral_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str =
 
     try:
         from sklearn.cluster import SpectralClustering
-    except ImportError:
-        raise ImportError("Function < spectral_cluster > requires sklearn")
+        from sklearn.neighbors import sort_graph_by_row_values
+    except ImportError as exc:
+        raise ImportError(f"Function < spectral_cluster > requires sklearn:\n{exc}")
+
+    if (n_samples := len(df)) == 0:
+        raise ValueError(f"Input DataFrame is empty.")
+    if n_samples == 1:
+        return df.with_columns(pl.lit(0).alias("Cluster"))
 
     default_kwargs = {
         "assign_labels": "kmeans"
@@ -444,7 +500,7 @@ def spectral_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str =
         default_kwargs.update(kwargs)
 
     distances = distance_matrix(
-        array_1=[a.reshape(-1) for a in df[features_col].to_numpy()],
+        array_1=_to_arrays(df, features_col),
         array_2=None,
         metric=metric,
         n_jobs=n_jobs,
@@ -469,6 +525,7 @@ def spectral_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str =
     model = SpectralClustering(
         affinity="precomputed_nearest_neighbors",
         n_jobs=n_jobs,
+        n_clusters=n_clusters,
         **default_kwargs
     )
 
@@ -478,7 +535,7 @@ def spectral_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str =
 
 
 def optics_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = 'jaccard', n_jobs: int = 1,
-                   batch_size: int = 1024, threshold: float = 0.3, cluster_method: str = "dbscan",
+                   threshold: float = 0.3, cluster_method: str = "dbscan",
                    cluster_threshold: float = None, kwargs: dict = None):
     """
     Cluster molecules using the OPTICS approach.
@@ -511,8 +568,13 @@ def optics_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = '
 
     try:
         from sklearn.cluster import OPTICS
-    except ImportError:
-        raise ImportError("Function < optics_cluster > requires sklearn")
+    except ImportError as exc:
+        raise ImportError(f"Function < optics_cluster > requires sklearn:\n{exc}")
+
+    if (n_samples := len(df)) == 0:
+        raise ValueError(f"Input DataFrame is empty.")
+    if n_samples == 1:
+        return df.with_columns(pl.lit(0).alias("Cluster"))
 
     default_kwargs = {
         "min_samples": 5,
@@ -534,13 +596,15 @@ def optics_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = '
         default_kwargs.update(kwargs)
 
     if cluster_method == "dbscan":
-        default_kwargs["eps"] = cluster_threshold
+        if cluster_threshold is not None:
+            default_kwargs["eps"] = cluster_threshold
     elif cluster_method == "xi":
-        default_kwargs["xi"] = cluster_threshold
+        if cluster_threshold is not None:
+            default_kwargs["xi"] = cluster_threshold
     else:
-        raise ValueError(f"cluster_method must be one of: 'dbscan', 'xi'")
+        raise ValueError("cluster_method must be one of: 'dbscan', 'xi'")
 
-    array = np.vstack(df[features_col].to_numpy())
+    array = np.vstack(_to_arrays(df, features_col))
 
     model = OPTICS(
         max_eps=threshold,
@@ -554,7 +618,8 @@ def optics_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = '
 
     return df.with_columns(pl.Series('Cluster', labels))
 
-def kmeans_cluster(df: pl.DataFrame, features_col: str = "RDKit", n_clusters: int = 3, kwargs: Optional[dict] = None):
+
+def kmeans_cluster(df: pl.DataFrame, features_col: str = "RDKit", n_clusters: int = 3, kwargs: dict = None):
     """
     Cluster molecules using the KMeans approach.
 
@@ -564,10 +629,10 @@ def kmeans_cluster(df: pl.DataFrame, features_col: str = "RDKit", n_clusters: in
         A polars DataFrame
     features_col: str
         Name of the column with features. Default is RDKit
-    n_jobs: int
-        Number of cores to use. Default is 1.
+    n_clusters: int
+        Number of clusters to generate.
     kwargs: dict
-        Additional keyword arguments passed to OPTICS.
+        Additional keyword arguments passed to KMeans.
 
     Returns
     -------
@@ -576,8 +641,13 @@ def kmeans_cluster(df: pl.DataFrame, features_col: str = "RDKit", n_clusters: in
 
     try:
         from sklearn.cluster import KMeans
-    except ImportError:
-        raise ImportError("Function < kmeans_cluster > requires scikit-learn.")
+    except ImportError as exc:
+        raise ImportError(f"Function < kmeans_cluster > requires scikit-learn.:\n{exc}")
+
+    if (n_samples := len(df)) == 0:
+        raise ValueError(f"Input DataFrame is empty.")
+    if n_samples == 1:
+        return df.with_columns(pl.lit(0).alias("Cluster"))
 
     default_kwargs = {
         "init": "k-means++",
@@ -596,7 +666,7 @@ def kmeans_cluster(df: pl.DataFrame, features_col: str = "RDKit", n_clusters: in
 
         default_kwargs.update(kwargs)
 
-    array = np.vstack(df[features_col].to_numpy())
+    array = np.vstack(_to_arrays(df, features_col))
 
     model = KMeans(
         n_clusters=n_clusters,
