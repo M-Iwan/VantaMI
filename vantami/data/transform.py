@@ -778,3 +778,110 @@ def dataframe_2_tsne(df: pl.DataFrame, features_col: str = "RDKit", output_col: 
     )
 
     return df, tsne
+
+
+def array_2_umap(array: npt.NDArray, n_components: int, distance_threshold: float = 0.1,
+                 distance_metric: str = "euclidean", random_state: int = 42, as_list: bool = False, kwargs: dict = None):
+    """
+    Transform the passed array using Uniform Manifold Approximation and Projection (UMAP).
+
+    Parameters
+    ----------
+    array: npt.NDArray
+        2D numpy array
+    n_components: int
+        Number of dimensions to keep
+    distance_threshold: float
+        Minimum distance between points in the embedded space
+    distance_metric: str
+        Name of the distance metric to use
+    random_state: int
+        Random state for reproducibility
+    as_list: bool
+        A flag to return the array as a list of 1D numpy arrays
+    kwargs: dict
+        Other parameters passed to the UMAP object.
+
+    Returns
+    -------
+    (array: Union[npt.NDarray, List[npt.NDArray]], UMAP)
+    """
+
+    try:
+        import umap
+    except ImportError as exc:
+        raise ImportError(f"Function < array_2_umap > requires < umap > library:\n{exc}")
+
+    default_kwargs = {
+        "n_neighbors": 16,
+    }
+
+    reserved_kwargs = {
+        "n_components",
+        "min_dist",
+        "metric",
+        "random_state"
+    }
+
+    if kwargs is not None:
+        if reserved_kwargs.intersection(kwargs):
+            raise ValueError(f"kwargs must not contain managed arguments: {reserved_kwargs}")
+        default_kwargs.update(kwargs)
+
+    ump = umap.UMAP(
+        n_components=n_components,
+        metric=distance_metric,
+        min_dist=distance_threshold,
+        random_state=random_state,
+        **default_kwargs
+    )
+    emb = ump.fit_transform(array)
+
+    if as_list:
+        return [array.reshape(-1) for array in np.vsplit(emb, emb.shape[0])], ump
+    return emb, ump
+
+
+def dataframe_2_umap(df: pl.DataFrame, features_col: str = "RDKit", output_col: str = None, n_components: int = 64,
+                     distance_threshold: float = 0.1, distance_metric: str = "euclidean",
+                     random_state: int = 42, kwargs: dict = None):
+    """
+    Transform features in a DataFrame using Uniform Manifold Approximation and Projection (UMAP).
+
+    Parameters
+    ----------
+    df: pl.DataFrame
+        A Polars DataFrame with features to transform
+    features_col: str
+        The name of the column with features
+    output_col: str
+        The name for the column with transformed features
+    n_components: int
+        Number of dimensions to keep
+    distance_threshold: float
+        Minimum distance between points in the embedded space
+    distance_metric: str
+        Name of the distance metric to use
+    random_state: int
+        Random state for reproducibility
+    kwargs: dict
+        Other parameters passed to the UMAP object.
+
+    Returns
+    -------
+    (pl.DataFrame, UMAP)
+    """
+
+    if output_col is None:
+        output_col = features_col + "_UMAP"
+
+    array = np.vstack(df[features_col].to_numpy())
+    emb, ump = array_2_umap(
+        array, n_components=n_components, distance_threshold=distance_threshold, distance_metric=distance_metric,
+        as_list=True, random_state=random_state, kwargs=kwargs)
+
+    df = df.with_columns(
+        pl.Series(output_col, emb)
+    )
+
+    return df, ump
