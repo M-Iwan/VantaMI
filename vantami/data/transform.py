@@ -3,40 +3,37 @@ from math import floor
 import polars as pl
 
 import numpy as np
+import numpy.typing as npt
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import RobustScaler
 
 
 class DataTransformer:
-    """
-    A class for preprocessing and transforming feature data prior to machine learning model training.
-
-    Handles several data preprocessing steps including:
-    - Removing features with missing values, infinities, zero variance or very large values
-    - Removing highly correlated features
-    - Imputing missing values
-    - Removing features with near-zero variance
-    - Scaling features using robust scaling
-
-    Parameters
-    -----------
-    use_masks: bool, default=True
-        Whether to remove missing, infinite, very large or zero-variance features.
-    use_corr: bool, default=False
-        Whether to perform correlation analysis and remove highly correlated features.
-    use_imputer: bool, default=True
-        Whether to impute missing values.
-    use_selector: bool, default=True
-        Whether to remove features with near-zero variance.
-    use_scaler: bool, default=True
-        Whether to scale features using RobustScaler.
-    """
-
     def __init__(self, use_masks: bool = True, use_corr: bool = False, use_imputer: bool = True,
                  use_selector: bool = True, use_scaler: bool = True):
         """
-        Initialize the DataTransformer object.
+        A class for preprocessing and transforming feature data prior to machine learning model training.
+
+        Handles several data preprocessing steps including:
+            - Removing features with missing values, infinities, zero variance or very large values
+            - Removing highly correlated features
+            - Imputing missing values
+            - Removing features with near-zero variance
+            - Scaling features using robust scaling
+
+        Parameters
+        ----------
+        use_masks: bool, default=True
+            Whether to remove missing, infinite, very large or zero-variance features.
+        use_corr: bool, default=False
+            Whether to perform correlation analysis and remove highly correlated features.
+        use_imputer: bool, default=True
+            Whether to impute missing values.
+        use_selector: bool, default=True
+            Whether to remove features with near-zero variance.
+        use_scaler: bool, default=True
+            Whether to scale features using RobustScaler.
         """
         self.imputer = None
         self.selector = None
@@ -604,3 +601,180 @@ def get_transformer_params(features: str):
                        f'function at novami.data.transform')
 
     return params
+
+
+def array_2_pca(array: npt.NDArray, n_components: int = 64, random_state: int = 42,
+                as_list: bool = False, kwargs: dict = None):
+    """
+    Transform the passed array using Principal Component Analysis.
+
+    Parameters
+    ----------
+    array: npt.NDArray
+        2D numpy array
+    n_components: int
+        Number of principal components to keep
+    random_state: int
+        Random state for reproducibility
+    as_list: bool
+        A flag to return the array as a list of 1D numpy arrays
+    kwargs: dict
+        Other parameters passed to the PCA object.
+
+    Returns
+    -------
+    (array: Union[npt.NDarray, List[npt.NDArray]], PCA)
+    """
+
+    try:
+        from sklearn.decomposition import PCA
+    except ImportError as exc:
+        raise ImportError(f"Function < array_2_pca > requires < sklearn > library:\n{exc}")
+
+    reserved_kwargs = {
+        "n_components",
+        "random_state"
+    }
+
+    if kwargs is not None:
+        if reserved_kwargs.intersection(kwargs):
+            raise ValueError(f"kwargs must not contain managed arguments: {reserved_kwargs}")
+    else:
+        kwargs = {}
+
+    pca = PCA(n_components=n_components, random_state=random_state, **kwargs)
+    emb = pca.fit_transform(array)
+
+    if as_list:
+        return [array.reshape(-1) for array in np.vsplit(emb, emb.shape[0])], pca
+    return emb, pca
+
+
+def dataframe_2_pca(df: pl.DataFrame, features_col: str = "RDKit", output_col: str = None, n_components: int = 64,
+                    random_state: int = 42, kwargs: dict = None):
+    """
+    Transform features in a DataFrame using Principal Component Analysis.
+
+    Parameters
+    ----------
+    df: pl.DataFrame
+        A Polars DataFrame with features to transform
+    features_col: str
+        The name of the column with features
+    output_col: str
+        The name for the column with transformed features
+    n_components: int
+        Number of principal components to keep
+    random_state: int
+        Random state for reproducibility
+    kwargs: dict
+        Other parameters passed to the PCA object.
+
+    Returns
+    -------
+    (pl.DataFrame, PCA)
+    """
+
+    if output_col is None:
+        output_col = features_col + "_PCA"
+
+    array = np.vstack(df[features_col].to_numpy())
+    emb, pca = array_2_pca(array, n_components=n_components, as_list=True, random_state=random_state, kwargs=kwargs)
+
+    df = df.with_columns(
+        pl.Series(output_col, emb)
+    )
+
+    return df, pca
+
+
+def array_2_tsne(array: npt.NDArray, n_components: int = 2, perplexity: int = 30, random_state: int = 42,
+                 as_list: bool = False, kwargs: dict = None):
+    """
+    Transform the passed array using t-Stochastic Neighbor Embedding.
+
+    Parameters
+    ----------
+    array: npt.NDArray
+        2D numpy array
+    n_components: int
+        Number of dimensions to keep
+    perplexity: int
+        Number of neighbors (more or less) considered by the manifold algorithm
+    random_state: int
+        Random state for reproducibility
+    as_list: bool
+        A flag to return the array as a list of 1D numpy arrays
+    kwargs: dict
+        Other parameters passed to the TSNE object.
+
+    Returns
+    -------
+    (array: Union[npt.NDarray, List[npt.NDArray]], TSNE)
+    """
+
+    try:
+        from sklearn.manifold import TSNE
+    except ImportError as exc:
+        raise ImportError(f"Function < array_2_tsne > requires < sklearn > library:\n{exc}")
+
+    reserved_kwargs = {
+        "n_components",
+        "perplexity",
+        "random_state",
+    }
+
+    if kwargs is not None:
+        if reserved_kwargs.intersection(kwargs):
+            raise ValueError(f"kwargs must not contain managed arguments: {reserved_kwargs}")
+    else:
+        kwargs = {}
+
+    tsne = TSNE(n_components=n_components, perplexity=perplexity, random_state=random_state, **kwargs)
+    emb = tsne.fit_transform(array)
+
+    if as_list:
+        return [array.reshape(-1) for array in np.vsplit(emb, emb.shape[0])], tsne
+    return emb, tsne
+
+
+def dataframe_2_tsne(df: pl.DataFrame, features_col: str = "RDKit", output_col: str = None, n_components: int = 2,
+                     perplexity: int = 30, random_state: int = 42, kwargs: dict = None):
+    """
+    Transform features in a DataFrame using t-Stochastic Neighbor Embedding
+
+    Parameters
+    ----------
+    df: pl.DataFrame
+        A Polars DataFrame with features to transform
+    features_col: str
+        The name of the column with features
+    output_col: str
+        The name for the column with transformed features
+    n_components: int
+        Number of dimensions to keep
+    perplexity: int
+        Number of neighbors (more or less) considered by the manifold algorithm
+    random_state: int
+        Random state for reproducibility
+    kwargs: dict
+        Other parameters passed to the TSNE object.
+
+    Returns
+    -------
+    (pl.DataFrame, TSNE)
+    """
+
+    if output_col is None:
+        output_col = features_col + "_TSNE"
+
+    array = np.vstack(df[features_col].to_numpy())
+
+    emb, tsne = array_2_tsne(array, n_components=n_components, perplexity=perplexity, as_list=True,
+                             random_state=random_state, kwargs=kwargs)
+
+    df = df.with_columns(
+        pl.Series(output_col, emb)
+    )
+
+    return df, tsne
