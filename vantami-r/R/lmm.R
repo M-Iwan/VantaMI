@@ -113,18 +113,20 @@ fit_lmm <- function(data, form) {
 #' @param model A fitted \code{lmerMod} or \code{lmerModLmerTest} object,
 #'   typically the \code{$model} element from \code{\link{fit_lmm}}.
 #'
-#' @return A named list with elements \code{anova_table}, \code{vif}, \code{r2},
+#' @return A named list with elements \code{summary}, \code{anova_table}, \code{vif}, \code{r2},
 #'   \code{icc}, \code{varcorr}, \code{coefficients}, and \code{emmeans}
-#'   (pairwise contrasts for all terms significant at p < 0.05).
 #' @export
 analyze_lmm <- function(model) {
-  
+
   message("Running ANOVA")
   anova_table <- tryCatch(
     as.data.frame(stats::anova(model, type = 2, ddf = "Satterthwaite")),
-    error = function(e) { message("ANOVA failed: ", conditionMessage(e)); NA }
+    error = function(e) {
+      message("ANOVA failed: ", conditionMessage(e))
+      NA
+    }
   )
-  
+
   message("Computing VIF")
   vif <- tryCatch(
     car::vif(model),
@@ -133,45 +135,57 @@ analyze_lmm <- function(model) {
       NA
     }
   )
-  
+
   message("Computing R2")
   r2 <- tryCatch(performance::r2(model), error = function(e) NA)
-  
+
   message("Computing ICC")
-  icc <- tryCatch(performance::icc(model, by_group = TRUE), error = function(e) NA)
-  
+  icc <- tryCatch(
+    performance::icc(model, by_group = TRUE),
+    error = function(e) NA
+  )
+
   message("Extracting variance components")
   varcorr <- as.data.frame(VarCorr(model))
-  
+
   message("Extracting coefficients")
   coefficients <- summary(model)$coefficients
-  
-  message("Computing emmeans for significant terms")
-  sig_terms <- character(0)
-  if (is.data.frame(anova_table) || inherits(anova_table, "anova")) {
-    aov_df    <- as.data.frame(anova_table)
-    sig_terms <- rownames(aov_df)[which(aov_df[["Pr(>F)"]] < 0.05)]
-  }
-  
+
+  message("Computing emmeans for all fixed-effect terms")
+
+  # Extract all fixed-effect terms, excluding the response and random effects.
+  fixed_effects <- attr(stats::terms(model), "term.labels")
+
   emmeans_results <- setNames(
-    lapply(sig_terms, function(term) {
+    lapply(fixed_effects, function(term) {
       tryCatch({
         emm <- emmeans::emmeans(model, specs = term)
+
         list(
-          means    = emm,
-          pairwise = tryCatch(pairs(emm, adjust = "tukey"), error = function(e) NA)
+          means = emm,
+          pairwise = tryCatch(
+            pairs(emm, adjust = "tukey"),
+            error = function(e) {
+              message(
+                "Pairwise contrasts failed for '", term, "': ",
+                conditionMessage(e)
+              )
+              NA
+            }
+          )
         )
       }, error = function(e) {
         message("emmeans failed for '", term, "': ", conditionMessage(e))
         NA
       })
     }),
-    sig_terms
+    fixed_effects
   )
-  
+
   message("Done.")
-  
+
   list(
+    summary      = summary(model),
     anova_table  = anova_table,
     vif          = vif,
     r2           = r2,
@@ -189,6 +203,7 @@ analyze_lmm <- function(model) {
 #' @return Invisibly returns \code{results} (called for its side effects).
 #' @export
 print_results <- function(results) {
+  message("=== Summary ===");      print(results$summary)
   message("=== ANOVA ===");        print(results$anova_table)
   message("=== VIF ===");          print(results$vif)
   message("=== R2 ===");           print(results$r2)
