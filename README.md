@@ -15,7 +15,7 @@ The usual versioning conventions are followed loosely, with minor version bumps 
 corresponding to a substantial update to a specific module.
 
 ### Repository Structure
-Last updated on version: 0.4.4
+Last updated on version: 0.4.5
 
 ```
 vantami/
@@ -69,6 +69,7 @@ vantami/
 │   ├── nlp/  
 │   │   ├── article.py             Article class for retrieving metadata based on DOI/Names
 │   │   ├── cluster.py             Latent Dirichlet Allocation for abstract-based clustering
+│   │   ├── embedding.py           Sentence embeddings using MiniLM and Qwen3
 │   │   └── tokenize.py            Word and document tokenizers
 │   ├── standardize/   
 │   │   ├── clean.py               Wrappers around RDKit functions for standaradizing SMILES
