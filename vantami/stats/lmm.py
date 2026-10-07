@@ -115,7 +115,7 @@ def check_effects(df: pl.DataFrame, fixed_effects: Union[str, List[str]], random
             level_fraction = round_to_significant(n_level / n_total, 3)
 
             random_counts = {
-                f"n_{random_effect}": (df_level[random_effect].drop_nulls().n_unique())
+                f"{random_effect}_n_entries": (df_level[random_effect].drop_nulls().n_unique())
                 for random_effect in random_effects
             }
 
@@ -134,19 +134,18 @@ def check_effects(df: pl.DataFrame, fixed_effects: Union[str, List[str]], random
             )
 
             random_outcomes = {
-                f"{random_effect}": classify_value(
-                    value=random_count,
+                f"{random_effect}_outcome": classify_value(
+                    value=random_counts[f"{random_effect}_n_entries"],
                     min_value=config.min_random,
                     suff_value=config.suff_random,
                     adeq_value=config.adeq_random,
                 )
-                for random_effect, random_count in random_counts.items()
+                for random_effect in random_effects
             }
 
-            checks = [
-                ("n_obs", n_obs_outcome),
-                ("frac", frac_outcome),
-                *random_outcomes.items(),
+            checks = [("n_obs", n_obs_outcome), ("frac", frac_outcome),
+                *[(random_effect, random_outcomes[f"{random_effect}_outcome"])
+                  for random_effect in random_effects],
             ]
 
             outcome = min(
@@ -154,33 +153,30 @@ def check_effects(df: pl.DataFrame, fixed_effects: Union[str, List[str]], random
                 key=lambda check_outcome: outcome_rank[check_outcome],
             )
 
-            limiting_checks = [
-                check_name for check_name, check_outcome in checks if check_outcome == outcome
-            ]
+            limiting_checks = [check_name for check_name, check_outcome in checks if check_outcome == outcome]
 
             if outcome == "Insufficient":
                 reason = f"Failed: {'|'.join(limiting_checks)}"
-
             elif outcome == "Minimal":
                 reason = f"Minimal: {'|'.join(limiting_checks)}"
                 valid_levels.append(level)
-
             else:
                 reason = ""
                 valid_levels.append(level)
 
             level_rows.append(pl.DataFrame({
-                    "fixed_effect": fix_ef,
-                    "level": level,
-                    "n_obs": n_level,
-                    "frac": level_fraction,
-                    **random_counts,
-                    "n_obs_outcome": n_obs_outcome,
-                    "frac_outcome": frac_outcome,
-                    **random_outcomes,
-                    "outcome": outcome,
-                    "reason": reason,
-                }))
+                "fixed_effect": fix_ef,
+                "level": level,
+                "n_obs": n_level,
+                "frac": level_fraction,
+                **random_counts,
+                "n_obs_outcome": n_obs_outcome,
+                "frac_outcome": frac_outcome,
+                **random_outcomes,
+                "outcome": outcome,
+                "reason": reason})
+            )
+
 
         n_valid = len(valid_levels)
 
