@@ -1,3 +1,14 @@
+# [0.4.5]: 07-10-2024
+[Added]
+- Molecular Embedding using MolEncoder from Fabian
+- Sentence Embedding using MiniLM and Qwen3
+- Cache support for all above models
+- OHE wrappers and helper functions
+- UMAP, PCA, and t-SNE embeddings
+
+[Changed]
+- Extended LMM summaries (R module)
+
 # [0.4.4]: 16-09-2026
 [Added]
 - Efficient implementation of pairwise-distance calculations, with automated backend selection (RDKit/SciPy)

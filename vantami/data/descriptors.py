@@ -1064,10 +1064,11 @@ def get_chemberta():
     Download the ChemBERTa model and tokenizer and save them in .cache.
     """
     try:
+        import truststore
         from transformers import AutoTokenizer, AutoModel, logging
         from vantami.cache import get_chemberta_model_path, get_chemberta_tokenizer_path
     except ImportError as exc:
-        raise ImportError(f"Function < get_chemberta > requires < transformers > library:\n{exc}")
+        raise ImportError(f"Function < get_chemberta > requires transformers and truststore libraries:\n{exc}")
 
     model = AutoModel.from_pretrained("DeepChem/ChemBERTa-100M-MLM")
     tokenizer = AutoTokenizer.from_pretrained("DeepChem/ChemBERTa-100M-MLM")
@@ -1079,6 +1080,234 @@ def get_chemberta():
         "model": str(get_chemberta_model_path()),
         "tokenizer": str(get_chemberta_tokenizer_path())
     }
+
+
+def smiles_2_molencoder(smiles: Union[str, List[str], npt.NDArray[str]], decimals: int = 5):
+    """
+    Parameters
+    ----------
+    smiles: Union[str, List[str], npt.NDArray[str]]
+        A valid SMILES or list of valid SMILES strings.
+    decimals: int
+        Number of decimals to keep.
+
+    Returns
+    -------
+    Union[np.ndarray, List[np.ndarray]]
+    """
+    try:
+        import torch
+    except ImportError as exc:
+        raise ImportError(f"Function < smiles_2_molencoder > requires PyTorch:\n{exc}")
+
+    try:
+        from transformers import AutoTokenizer, AutoModel, logging
+        from vantami.cache import get_molencoder_model_path, get_molencoder_tokenizer_path
+    except ImportError as exc:
+        raise ImportError(f"Function < smiles_2_molencoder > requires < transformers > library:\n{exc}")
+
+    logging.set_verbosity_error()
+    torch.set_num_threads(1)
+
+    model_path = get_molencoder_model_path()
+    tokenizer_path = get_molencoder_tokenizer_path()
+
+    if not model_path.is_file() or not tokenizer_path.is_file():
+        get_chemberta()
+
+    model = joblib.load(model_path)
+    model.eval()
+    tokenizer = joblib.load(tokenizer_path)
+
+    if isinstance(smiles, str):
+        return _from_hf(smiles=smiles, model=model, tokenizer=tokenizer, torch=torch, decimals=decimals)
+
+    elif isinstance(smiles, (list, np.ndarray)):
+        return [_from_hf(smiles=smi, model=model, tokenizer=tokenizer, torch=torch, decimals=decimals) for smi in smiles]
+
+    else:
+        raise TypeError(f"Expected smiles to be str, List[str] or npt.NDArray[str], got {type(smiles)} instead")
+
+
+def dataframe_2_molencoder(df: pl.DataFrame, smiles_col: str = 'SMILES', output_col: str = 'MolEncoder',
+                           decimals: int = 5, n_jobs: int = 1, batch_size: int = 512 ):
+    """
+    Convert SMILES in a polars DataFrame to MolEncoder embeddings.
+
+    Parameters
+    ----------
+    df : pl.DataFrame
+        A polars DataFrame.
+    smiles_col : str
+        Name of column with SMILES.
+    output_col : str, optional
+        Name of column for the output.
+    decimals: int
+        Number of decimals to keep.
+    n_jobs: int, optional
+        Number of cores to use for calculations.
+    batch_size: int, optional
+        Number of SMILES per batch.
+
+    Returns
+    -------
+    df : pl.DataFrame
+        A polars Dataframe with added MolEncoder column.
+    """
+
+    try:
+        from vantami.cache import get_molencoder_model_path, get_molencoder_tokenizer_path
+    except ImportError as exc:
+        raise ImportError(f"Function < dataframe_2_molencoder > requires the MolEncoder cache utilities:\n{exc}")
+
+    if not get_molencoder_model_path().is_file() or not get_molencoder_tokenizer_path().is_file():
+        get_molencoder()
+
+    smiles, n_jobs, smiles_batches = _prepare_batches(
+        df=df, smiles_col=smiles_col, n_jobs=n_jobs, batch_size=batch_size
+    )
+    if not smiles:
+        return df.with_columns(pl.lit(None).alias(output_col))
+
+    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=60, backend='loky')(
+        delayed(smiles_2_molencoder)(smiles=smi, decimals=decimals) for smi in smiles_batches
+    )
+
+    smiles_df = pl.DataFrame({
+        smiles_col: smiles,
+        output_col: list(chain.from_iterable(out))
+    })
+
+    df = df.join(smiles_df, on=smiles_col, how='left')
+
+    return df
+
+
+def get_molencoder():
+    """
+    Download the MolEncoder model and tokenizer and save them in .cache.
+    # Developed by Fabian Kruger
+    """
+    try:
+        import truststore
+        from transformers import AutoTokenizer, AutoModel, logging
+        from vantami.cache import get_molencoder_model_path, get_molencoder_tokenizer_path
+    except ImportError as exc:
+        raise ImportError(f"Function < get_molencoder > requires transformers and truststore libraries:\n{exc}")
+
+    truststore.inject_into_ssl()
+
+    model = AutoModel.from_pretrained("fabikru/MolEncoder")
+    tokenizer = AutoTokenizer.from_pretrained("fabikru/MolEncoder")
+
+    joblib.dump(model, get_molencoder_model_path())
+    joblib.dump(tokenizer, get_molencoder_tokenizer_path())
+
+    return {
+        "model": str(get_molencoder_model_path()),
+        "tokenizer": str(get_molencoder_tokenizer_path())
+    }
+
+
+def smiles_2_molencoder(smiles: Union[str, List[str], npt.NDArray[str]], decimals: int = 5):
+    """
+    Parameters
+    ----------
+    smiles: Union[str, List[str], npt.NDArray[str]]
+        A valid SMILES or list of valid SMILES strings.
+    decimals: int
+        Number of decimals to keep.
+
+    Returns
+    -------
+    Union[np.ndarray, List[np.ndarray]]
+    """
+    try:
+        import torch
+    except ImportError as exc:
+        raise ImportError(f"Function < smiles_2_molencoder > requires PyTorch:\n{exc}")
+
+    try:
+        from transformers import AutoTokenizer, AutoModel, logging
+        from vantami.cache import get_molencoder_model_path, get_molencoder_tokenizer_path
+    except ImportError as exc:
+        raise ImportError(f"Function < smiles_2_molencoder > requires < transformers > library:\n{exc}")
+
+    logging.set_verbosity_error()
+    torch.set_num_threads(1)
+
+    model_path = get_molencoder_model_path()
+    tokenizer_path = get_molencoder_tokenizer_path()
+
+    if not model_path.is_file() or not tokenizer_path.is_file():
+        get_chemberta()
+
+    model = joblib.load(model_path)
+    model.eval()
+    tokenizer = joblib.load(tokenizer_path)
+
+    if isinstance(smiles, str):
+        return _from_hf(smiles=smiles, model=model, tokenizer=tokenizer, torch=torch, decimals=decimals)
+
+    elif isinstance(smiles, (list, np.ndarray)):
+        return [_from_hf(smiles=smi, model=model, tokenizer=tokenizer, torch=torch, decimals=decimals) for smi in smiles]
+
+    else:
+        raise TypeError(f"Expected smiles to be str, List[str] or npt.NDArray[str], got {type(smiles)} instead")
+
+
+def dataframe_2_molencoder(df: pl.DataFrame, smiles_col: str = 'SMILES', output_col: str = 'MolEncoder',
+                           decimals: int = 5, n_jobs: int = 1, batch_size: int = 512 ):
+    """
+    Convert SMILES in a polars DataFrame to MolEncoder embeddings.
+
+    Parameters
+    ----------
+    df : pl.DataFrame
+        A polars DataFrame.
+    smiles_col : str
+        Name of column with SMILES.
+    output_col : str, optional
+        Name of column for the output.
+    decimals: int
+        Number of decimals to keep.
+    n_jobs: int, optional
+        Number of cores to use for calculations.
+    batch_size: int, optional
+        Number of SMILES per batch.
+
+    Returns
+    -------
+    df : pl.DataFrame
+        A polars Dataframe with added MolEncoder column.
+    """
+
+    try:
+        from vantami.cache import get_molencoder_model_path, get_molencoder_tokenizer_path
+    except ImportError as exc:
+        raise ImportError(f"Function < dataframe_2_molencoder > requires the MolEncoder cache utilities:\n{exc}")
+
+    if not get_molencoder_model_path().is_file() or not get_molencoder_tokenizer_path().is_file():
+        get_molencoder()
+
+    smiles, n_jobs, smiles_batches = _prepare_batches(
+        df=df, smiles_col=smiles_col, n_jobs=n_jobs, batch_size=batch_size
+    )
+    if not smiles:
+        return df.with_columns(pl.lit(None).alias(output_col))
+
+    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=60, backend='loky')(
+        delayed(smiles_2_molencoder)(smiles=smi, decimals=decimals) for smi in smiles_batches
+    )
+
+    smiles_df = pl.DataFrame({
+        smiles_col: smiles,
+        output_col: list(chain.from_iterable(out))
+    })
+
+    df = df.join(smiles_df, on=smiles_col, how='left')
+
+    return df
 
 
 def _to_mapc(smiles: str, radius: int, nbits: int, fn):
