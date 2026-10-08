@@ -1,9 +1,11 @@
+import re
 from math import floor
-
-import polars as pl
+from typing import List
 
 import numpy as np
 import numpy.typing as npt
+import polars as pl
+
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import RobustScaler
@@ -888,3 +890,56 @@ def dataframe_2_umap(df: pl.DataFrame, features_col: str = "RDKit", output_col: 
     )
 
     return df, ump
+
+
+def merge_arrays_dataframe(df: pl.DataFrame, input_col: List[str], output_col: str):
+    """
+    Merge numpy arrays held in polars columns of Array type.
+
+    Parameters
+    ----------
+    df: pl.DataFrame
+        Polars dataframe with arrays to merge
+    input_col: List[str]
+        Names of columns holding arrays
+    output_col: str
+        Name for the output column
+
+    Returns
+    -------
+    pl.DataFrame
+    """
+    if missing_cols := [col for col in input_col if col not in df.columns]:
+        raise ValueError(f"Columns missing from the DataFrame: {missing_cols}")
+
+    if output_col in df.columns:
+        print(f"Overwriting output column: {output_col}")
+
+    dtypes = {str(df[col].dtype).split(",")[0].split("(")[-1]
+              for col in input_col}
+
+    precisions = sorted({int(re.search(r"(\d+)", dt).group(1)) for dt in dtypes})
+
+    has_float = any(dtype.startswith("Float") for dtype in dtypes)
+    has_int = any(dtype.startswith("Int") for dtype in dtypes)
+    has_uint = any(dtype.startswith("UInt") for dtype in dtypes)
+
+    req_precision = np.max(precisions)
+
+    if has_float:
+        target_dtype = getattr(pl, f"Float{req_precision}")
+    elif has_int and has_uint:
+        target_dtype = getattr(pl, f"Int{req_precision}")
+    elif has_int:
+        target_dtype = getattr(pl, f"Int{req_precision}")
+    else:
+        target_dtype = getattr(pl, f"UInt{req_precision}")
+
+    df = df.with_columns(
+        pl.concat_arr([
+            pl.col(col).cast(pl.Array(target_dtype, df.schema[col].shape[0]))
+            for col in input_col
+        ]).alias(output_col)
+    )
+
+    return df
