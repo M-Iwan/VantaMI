@@ -10,7 +10,7 @@ package_data: dict[str, list[str]] = {
 
 setup(
     name="vantami",
-    version="0.4.5",
+    version="0.4.6",
     author="Mateusz Iwan",
     author_email="mateusz.iwan@hotmail.com",
     description="A collection of ML/AI tools for chemistry applications.",
@@ -37,7 +37,8 @@ setup(
             "scikit-learn >= 1.8",
             "rdkit >= 2026.03",
             "transformers >= 5.5",
-            "sentence_transformers >= 6"
+            "sentence_transformers >= 6.0",
+            "optuna >= 5.0"
         ],
     },
     python_requires=">=3.13",
