@@ -3,6 +3,8 @@ import inspect
 import datetime
 from typing import Dict
 
+import polars as pl
+
 from vantami.data.transform import DataTransformer, get_transformer_params
 from vantami.ml.params import *
 from vantami.ml.models import RegressorUnit, ClassifierUnit
