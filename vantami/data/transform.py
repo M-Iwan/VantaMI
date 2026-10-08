@@ -593,6 +593,9 @@ def get_transformer_params(features: str):
         'AtomPairCount': integer,
         'DaylightCount': integer,
         'ECFPCount': integer,
+        "MiniLM": continuous,
+        "Qwen3": continuous,
+        "MolEncoder": continuous
     }
 
     params = features_mapping.get(features, None)
