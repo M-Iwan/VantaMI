@@ -3,6 +3,7 @@ import inspect
 import datetime
 from typing import Dict
 
+import numpy as np
 import polars as pl
 
 from vantami.data.transform import DataTransformer, get_transformer_params
@@ -192,12 +193,14 @@ def dataframe_2_ohe(df: pl.DataFrame, input_col: Union[str, List[str]], output_c
     if levels is None:
         levels = {col: sorted(df[col].drop_nulls().unique()) for col in input_col}
 
+    levels_shape = sum([len(val) for val in levels.values()])
+
     df = df.with_columns(
         pl.struct(input_col).map_elements(
             lambda row: np.concat(
-                [one_hot_encode(row[col], levels=levels[col]) for col in input_col]
+                [value_2_ohe(row[col], levels=levels[col]) for col in input_col]
             ),
-            return_dtype=pl.Object
+            return_dtype=pl.Array(pl.UInt8, shape=levels_shape)
         ).alias(output_col)
     )
 

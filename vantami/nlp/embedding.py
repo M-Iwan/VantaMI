@@ -129,10 +129,16 @@ def dataframe_2_minilm(df: pl.DataFrame, string_col: str = 'String', output_col:
         delayed(string_2_minilm)(string=st, decimals=decimals) for st in string_batches
     )
 
-    string_df = pl.DataFrame({
-        string_col: strings,
-        output_col: list(chain.from_iterable(out))
-    })
+    string_df = pl.DataFrame(
+        {
+            string_col: strings,
+            output_col: list(chain.from_iterable(out))
+        },
+        schema = {
+            string_col: pl.String,
+            output_col: pl.Array(pl.Float64, shape=384)
+        }
+    )
 
     df = df.join(string_df, on=string_col, how='left')
 
@@ -153,7 +159,6 @@ def get_minilm():
     truststore.inject_into_ssl()
 
     model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-
     joblib.dump(model, get_minilm_model_path())
 
     return {
@@ -249,10 +254,16 @@ def dataframe_2_qwen3(df: pl.DataFrame, string_col: str = 'String', output_col: 
         delayed(string_2_qwen3)(string=st, decimals=decimals) for st in string_batches
     )
 
-    string_df = pl.DataFrame({
-        string_col: strings,
-        output_col: list(chain.from_iterable(out))
-    })
+    string_df = pl.DataFrame(
+        {
+            string_col: strings,
+            output_col: list(chain.from_iterable(out))
+        },
+        schema = {
+            string_col: pl.String,
+            output_col: pl.Array(pl.Float64, shape=1024)
+        }
+    )
 
     df = df.join(string_df, on=string_col, how='left')
 
