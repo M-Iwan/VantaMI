@@ -1,4 +1,16 @@
-# [0.4.5]: 07-10-2024
+# [0.4.6]: 08-10-2026
+[Added]
+- Modelling configurations for new descriptors
+- Array concatenation in dataframes with automated data type detection
+
+[Changed]
+- Embedding functions (like dataframe_2_pca) now accept 2nd dataframe to also transform it
+- Return schema for NLP and Molecular descriptors to polars Arrays
+
+[Fixed]
+- missing imports in vantami.ml.utils
+
+# [0.4.5]: 07-10-202
 [Added]
 - Molecular Embedding using MolEncoder from Fabian
 - Sentence Embedding using MiniLM and Qwen3
