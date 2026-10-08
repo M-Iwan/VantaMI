@@ -368,7 +368,7 @@ class DataTransformer:
 
     def fit_clipper(self, x_array: np.ndarray):
         """
-        Compute 6 timex Standard Deviation of features to be used as clipping thresholds.
+        Compute 6 times Standard Deviation of features to be used as clipping thresholds.
 
         Parameters
         ----------
@@ -655,15 +655,18 @@ def array_2_pca(array: npt.NDArray, n_components: int = 64, random_state: int = 
     return emb, pca
 
 
-def dataframe_2_pca(df: pl.DataFrame, features_col: str = "RDKit", output_col: str = None, n_components: int = 64,
-                    random_state: int = 42, kwargs: dict = None):
+def dataframe_2_pca(df: pl.DataFrame, tdf: pl.DataFrame = None, features_col: str = "RDKit", output_col: str = None,
+                    n_components: int = 64, random_state: int = 42, kwargs: dict = None):
     """
     Transform features in a DataFrame using Principal Component Analysis.
+    If a second DataFrame is provided, its features are embedded using model fit on the first one.
 
     Parameters
     ----------
     df: pl.DataFrame
-        A Polars DataFrame with features to transform
+        A Polars DataFrame with features to transform. Used for fitting.
+    tdf: pl.DataFrame
+        Another polars DataFrame. Not used for fitting.
     features_col: str
         The name of the column with features
     output_col: str
@@ -677,7 +680,7 @@ def dataframe_2_pca(df: pl.DataFrame, features_col: str = "RDKit", output_col: s
 
     Returns
     -------
-    (pl.DataFrame, PCA)
+    (PCA, pl.DataFrame, Optional[pl.DataFrame])
     """
 
     if output_col is None:
@@ -690,7 +693,12 @@ def dataframe_2_pca(df: pl.DataFrame, features_col: str = "RDKit", output_col: s
         pl.Series(output_col, emb)
     )
 
-    return df, pca
+    if tdf is not None:
+        tdf = tdf.with_columns(
+            pl.Series(output_col, pca.transform(np.vstack(tdf[features_col].to_numpy())))
+        )
+
+    return pca, df, tdf
 
 
 def array_2_tsne(array: npt.NDArray, n_components: int = 2, perplexity: int = 30, random_state: int = 42,
@@ -743,15 +751,18 @@ def array_2_tsne(array: npt.NDArray, n_components: int = 2, perplexity: int = 30
     return emb, tsne
 
 
-def dataframe_2_tsne(df: pl.DataFrame, features_col: str = "RDKit", output_col: str = None, n_components: int = 2,
-                     perplexity: int = 30, random_state: int = 42, kwargs: dict = None):
+def dataframe_2_tsne(df: pl.DataFrame, tdf: pl.DataFrame = None, features_col: str = "RDKit", output_col: str = None,
+                     n_components: int = 2, perplexity: int = 30, random_state: int = 42, kwargs: dict = None):
     """
-    Transform features in a DataFrame using t-Stochastic Neighbor Embedding
+    Transform features in a DataFrame using t-Stochastic Neighbor Embedding.
+    If a second DataFrame is provided, its features are embedded using model fit on the first one.
 
     Parameters
     ----------
     df: pl.DataFrame
-        A Polars DataFrame with features to transform
+        A Polars DataFrame with features to transform. Used for fitting.
+    tdf: pl.DataFrame
+        Another polars DataFrame. Not used for fitting.
     features_col: str
         The name of the column with features
     output_col: str
@@ -767,7 +778,7 @@ def dataframe_2_tsne(df: pl.DataFrame, features_col: str = "RDKit", output_col: 
 
     Returns
     -------
-    (pl.DataFrame, TSNE)
+    (TSNE, pl.DataFrame, Optional[pl.DataFrame])
     """
 
     if output_col is None:
@@ -782,7 +793,12 @@ def dataframe_2_tsne(df: pl.DataFrame, features_col: str = "RDKit", output_col: 
         pl.Series(output_col, emb)
     )
 
-    return df, tsne
+    if tdf is not None:
+        tdf = tdf.with_columns(
+            pl.Series(output_col, pca.transform(np.vstack(tdf[features_col].to_numpy())))
+        )
+
+    return tsne, df, tdf
 
 
 def array_2_umap(array: npt.NDArray, n_components: int, distance_threshold: float = 0.1,
@@ -847,16 +863,19 @@ def array_2_umap(array: npt.NDArray, n_components: int, distance_threshold: floa
     return emb, ump
 
 
-def dataframe_2_umap(df: pl.DataFrame, features_col: str = "RDKit", output_col: str = None, n_components: int = 64,
-                     distance_threshold: float = 0.1, distance_metric: str = "euclidean",
+def dataframe_2_umap(df: pl.DataFrame, tdf: pl.DataFrame = None, features_col: str = "RDKit", output_col: str = None,
+                     n_components: int = 64, distance_threshold: float = 0.1, distance_metric: str = "euclidean",
                      random_state: int = 42, kwargs: dict = None):
     """
     Transform features in a DataFrame using Uniform Manifold Approximation and Projection (UMAP).
+    If a second DataFrame is provided, its features are embedded using model fit on the first one.
 
     Parameters
     ----------
     df: pl.DataFrame
-        A Polars DataFrame with features to transform
+        A Polars DataFrame with features to transform. Used for fitting.
+    tdf: pl.DataFrame
+        Another polars DataFrame. Not used for fitting.
     features_col: str
         The name of the column with features
     output_col: str
@@ -874,7 +893,7 @@ def dataframe_2_umap(df: pl.DataFrame, features_col: str = "RDKit", output_col: 
 
     Returns
     -------
-    (pl.DataFrame, UMAP)
+    (UMAP, pl.DataFrame, Optional[pl.DataFrame])
     """
 
     if output_col is None:
@@ -889,7 +908,12 @@ def dataframe_2_umap(df: pl.DataFrame, features_col: str = "RDKit", output_col: 
         pl.Series(output_col, emb)
     )
 
-    return df, ump
+    if tdf is not None:
+        tdf = tdf.with_columns(
+            pl.Series(output_col, pca.transform(np.vstack(tdf[features_col].to_numpy())))
+        )
+
+    return ump, df, tdf
 
 
 def merge_arrays_dataframe(df: pl.DataFrame, input_col: List[str], output_col: str):
