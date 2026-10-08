@@ -124,7 +124,7 @@ class ClassifierUnit(Unit):
     -----
     Author: Mateusz Iwan
     Email: mateusz.iwan@hotmail.com
-    Added in NovaMI version: 0.1.2
+    Added in VantaMI version: 0.1.2
     """
     def __init__(self, model, transformer: DataTransformer, use_proba: bool = True):
 
@@ -255,7 +255,7 @@ class RegressorUnit(Unit):
     -----
     Author: Mateusz Iwan
     Email: mateusz.iwan@hotmail.com
-    Added in NovaMI version: 0.1.2
+    Added in VantaMI version: 0.1.2
     """
     def __init__(self, model, transformer: DataTransformer):
 
@@ -369,7 +369,7 @@ class Ensemble(ABC):
     -----
     Author: Mateusz Iwan
     Email: mateusz.iwan@hotmail.com
-    Added in NovaMI version: 0.1.2
+    Added in VantaMI version: 0.1.2
     """
 
     def __init__(self, units: Optional[List[Unit]] = None, voting: str = 'soft', weights: Optional[np.ndarray] = None):

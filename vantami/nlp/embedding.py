@@ -22,7 +22,7 @@ def _from_hf(string: str, model, torch, decimals):
     return np.round(emb, decimals)
 
 
-def _prepare_batches(df: pl.DataFrame, string_col: str, n_jobs: int, batch_size: int):
+def _prepare_batches_strings(df: pl.DataFrame, string_col: str, n_jobs: int, batch_size: int):
     """
     Prepare batches of strings for downstream processing.
     """
@@ -119,7 +119,7 @@ def dataframe_2_minilm(df: pl.DataFrame, string_col: str = 'String', output_col:
     if not get_minilm_model_path().is_file():
         get_minilm()
 
-    strings, n_jobs, string_batches = _prepare_batches(
+    strings, n_jobs, string_batches = _prepare_batches_strings(
         df=df, string_col=string_col, n_jobs=n_jobs, batch_size=batch_size
     )
     if not strings:
@@ -244,7 +244,7 @@ def dataframe_2_qwen3(df: pl.DataFrame, string_col: str = 'String', output_col: 
     if not get_qwen3_model_path().is_file():
         get_qwen3()
 
-    strings, n_jobs, string_batches = _prepare_batches(
+    strings, n_jobs, string_batches = _prepare_batches_strings(
         df=df, string_col=string_col, n_jobs=n_jobs, batch_size=batch_size
     )
     if not strings:
