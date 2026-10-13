@@ -162,7 +162,7 @@ def get_params_random_forest_regressor(trial: optuna.trial.Trial) -> Dict:
         'max_features': trial.suggest_categorical('max_features', ['sqrt', 'log2', None]),
 
         # medium-impact parameters
-        'criterion': trial.suggest_categorical('criterion', ['friedman_mse', 'squared_error', 'poisson']),
+        'criterion': trial.suggest_categorical('criterion', ['squared_error', 'poisson']),
         'min_samples_leaf': trial.suggest_int('min_samples_leaf', 1, 10),
         'min_samples_split': trial.suggest_int('min_samples_split', 2, 10),
 
