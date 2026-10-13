@@ -5,6 +5,7 @@ from copy import deepcopy
 import numpy as np
 import pandas as pd
 import polars as pl
+import optuna
 
 from vantami.ml.evaluate import kf_evaluate, tt_evaluate
 from vantami.ml.models import Unit, Ensemble, ClassifierUnit, RegressorUnit, ClassifierEnsemble, RegressorEnsemble
@@ -113,7 +114,7 @@ def grid_hyperparameter_search(model_class, df: pd.DataFrame, features_col: str,
 
 
 def optuna_hyperparameter_search(model_class, df: pd.DataFrame, features_col: str, target_col: str, fold_col: str,
-                                 parameters: dict = None, sample_weight_col: str = None, selection_metric: str = 'mcc',
+                                 parameters: dict = None, sample_weight_col: str = None, selection_metric: str = 'MCC',
                                  n_trials: int = 64):
     """
     Perform hyperparameter search using optuna.
@@ -203,7 +204,6 @@ def optuna_hyperparameter_search(model_class, df: pd.DataFrame, features_col: st
             scores.append(fold_score[selection_metric])
             metrics[f'model_{fold}'] = fold_score
 
-            # add early stopping
             trial.report(fold_score[selection_metric], fold)
             if trial.should_prune():
                 raise optuna.TrialPruned()
@@ -214,7 +214,8 @@ def optuna_hyperparameter_search(model_class, df: pd.DataFrame, features_col: st
 
         return mean_score
 
-    study = optuna.create_study(direction=direction)
+    sampler = optuna.samplers.TPESampler(seed=42)
+    study = optuna.create_study(direction=direction, sampler=sampler)
     study.optimize(objective, n_trials=n_trials)
     best_trial = study.best_trial
 
@@ -313,7 +314,8 @@ def optimize_unit_optuna(model_name: str, dataset_manager: KFoldManager, optimiz
 
         return metric
 
-    study = optuna.create_study(direction=direction)
+    sampler = optuna.samplers.TPESampler(seed=42)
+    study = optuna.create_study(direction=direction, sampler=sampler)
     study.optimize(objective, n_trials=n_trials)
 
     return study, best_ensemble
