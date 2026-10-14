@@ -1,3 +1,29 @@
+# [0.5.0]: 14-10-2026
+[Added]
+- Extended Unit and Ensemble functionality for multi-modal modeling
+- Support for multiple feature groups passed as Dict[str, npt.NDArray]
+- Support for sequential transformations within a feature group, such as DataTransformer followed by PCA or UMAP
+- Support for varied transformations across feature groups
+- New Embedder base class
+- New PCAEmbedder and UMAPEmbedder classes
+- Default parameter helpers for PCA and UMAP embedders
+- Optuna parameter samplers for LGBMClassifier and CatBoostClassifier
+
+[Changed]
+- Updated KFoldManager and TTManager to store feature arrays as Dict[str, npt.NDArray]
+- Updated training, ensemble, and Optuna utilities for the multi-modal Unit API
+- Extended DataTransformer with improved feature-count tracking, input-shape validation, reset support, and additional preprocessing checks
+- Added reset/refit support for Unit transformation pipelines
+- Improved reproducibility of Optuna searches through an explicit sampler
+- Updated dataframe PCA and UMAP utilities to transform an optional second dataframe using the fitted embedding model
+
+[Removed]
+- All already deprecated code in /deprecated
+- vantami.ml.score module - long superseded by Unit/Ensemble code 
+
+[Broke]
+- Probably something broke along the way, these will be addressed in sub-updates to version 0.5.0
+
 # [0.4.6]: 08-10-2026
 [Added]
 - Modelling configurations for new descriptors
