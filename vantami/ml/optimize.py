@@ -1,6 +1,7 @@
 import inspect
 from itertools import product
 from copy import deepcopy
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -39,6 +40,8 @@ def random_hyperparameter_search(model_class, df: pd.DataFrame, features_col: st
     -----
     The function is now somewhat deprecated and not integrated with the rest of the code.
     """
+    print("Function < random_hyperparameter_search > has not been updated in a long time and likely doesn't work")
+    raise NotImplementedError
 
     results = []
 
@@ -78,6 +81,8 @@ def grid_hyperparameter_search(model_class, df: pd.DataFrame, features_col: str,
     -----
     The function is now somewhat deprecated and not integrated with the rest of the code.
     """
+    print("Function < grid_hyperparameter_search > has not been updated in a long time and likely doesn't work")
+    raise NotImplementedError
     results = []
 
     grid = grid_parameters(parameters[model_class.__name__])
@@ -113,119 +118,9 @@ def grid_hyperparameter_search(model_class, df: pd.DataFrame, features_col: str,
     return results
 
 
-def optuna_hyperparameter_search(model_class, df: pd.DataFrame, features_col: str, target_col: str, fold_col: str,
-                                 parameters: dict = None, sample_weight_col: str = None, selection_metric: str = 'MCC',
-                                 n_trials: int = 64):
-    """
-    Perform hyperparameter search using optuna.
-
-    Parameters
-    ----------
-    model_class
-        A model implementing .fit and .predict functions based on np.ndarrays
-    df: pd.DataFrame
-        A dataframe with features, target, and fold indices.
-    features_col: str
-        Name of the column with features represented as NumPy arrays.
-    target_col: str
-        Name of the column with target values.
-    fold_col: str
-        Name of the column with fold mapping for test set.
-    sample_weight_col: str
-        Name of the column with sample weights.
-    parameters: dict[func]
-        A dictionary mapping model name to functions for creating trial parameters.
-    selection_metric: str
-        Name of the metric to use for model selection. Default is 'mcc'.
-    n_trials: int
-        Number of trials to perform. Default is 64.
-
-    Returns
-    -------
-    study
-        The whole performed study
-    best_trial
-        Trial with the best final metrics.
-    """
-
-    # select task and scoring function based on passed metric
-    if selection_metric in ['Recall', 'Accuracy', 'ROC AUC', 'Precision', 'F1 Score',
-                            'MCC', 'Balanced Accuracy', 'Specificity']:
-        score_function = score_classification_model
-    elif selection_metric in ['R2', 'MAE', 'RMSE']:
-        score_function = score_regression_model
-    else:
-        raise ValueError('Unknown selection metric passed')
-
-    # Select optimization direction and variance penalty sign
-    if selection_metric in ['Recall', 'Accuracy', 'ROC AUC', 'Precision', 'F1 Score',
-                            'MCC', 'R2', 'Balanced Accuracy', 'Specificity']:
-        direction = 'maximize'
-    else:
-        direction = 'minimize'
-
-    x_values = np.vstack(df[features_col].to_numpy())
-    y_values = np.array(df[target_col].tolist())
-    splits = np.array(df[fold_col].tolist())
-    n_split = df[fold_col].unique()
-
-    def objective(trial: optuna.Trial):
-
-        model_name = model_class.__name__
-        model_params = parameters.get(model_name)
-
-        if model_params is None:
-            raise ValueError(f'Hyperparameters missing for {model_name}')
-
-        # check for illegal combinations of parameters
-        try:
-            model_hps = model_params(trial)
-            model = model_class(**model_hps)
-        except ValueError as e:
-            raise optuna.TrialPruned() from e
-
-        scores = []
-        metrics = {}  # compatibility with other code
-
-        for fold in n_split:
-            train_idx = np.where(splits != fold)[0]
-            eval_idx = np.where(splits == fold)[0]
-
-            if (sample_weight_col is not None) and ('sample_weight' in inspect.signature(model.fit).parameters):
-                weights_ = np.vstack(df[sample_weight_col].to_numpy()).reshape(-1)[train_idx]
-                model.fit(x_values[train_idx, :], y_values[train_idx], sample_weight=weights_)
-
-            else:
-                model.fit(x_values[train_idx, :], y_values[train_idx])
-
-            y_pred = model.predict(x_values[eval_idx, :])
-
-            fold_score = score_function(y_true=y_values[eval_idx], y_pred=y_pred)  # that's a dictionary
-            scores.append(fold_score[selection_metric])
-            metrics[f'model_{fold}'] = fold_score
-
-            trial.report(fold_score[selection_metric], fold)
-            if trial.should_prune():
-                raise optuna.TrialPruned()
-
-        mean_score = np.mean(scores)
-
-        trial.set_user_attr('metrics', average_scores(metrics))
-
-        return mean_score
-
-    sampler = optuna.samplers.TPESampler(seed=42)
-    study = optuna.create_study(direction=direction, sampler=sampler)
-    study.optimize(objective, n_trials=n_trials)
-    best_trial = study.best_trial
-
-    return study, best_trial
-
-
 def train_ensemble(unit: Unit, dataset_manager: KFoldManager, task: str = 'regression'):
     """
     Train an ensemble model based on dataset with KFold split.
-
 
     Parameters
     ----------
@@ -249,18 +144,18 @@ def train_ensemble(unit: Unit, dataset_manager: KFoldManager, task: str = 'regre
 
         funit = deepcopy(unit)
         funit.fit(**train_data)
-        funit.metrics['Training'] = funit.score(**train_data)
-        funit.metrics['Validation'] = funit.score(**eval_data)
+        _ = funit.score(**train_data, eval_type="Training")
+        _ = funit.score(**eval_data, eval_type="Validation")
         ensemble.add_unit(funit)
 
-    ensemble.average_metrics()
+    ensemble.aggregate_metrics()
     return ensemble
 
 
-def optimize_unit_optuna(model_name: str, dataset_manager: KFoldManager, optimization_metric: str = 'RMSE',
-                         task: str = 'regression', n_trials: int = 64, n_jobs: int = 1):
+def optuna_search(model_name: str, dataset_manager: KFoldManager, optimization_metric: str = 'RMSE',
+                  task: str = 'regression', n_trials: int = 64, n_jobs: int = 1, config: Dict[str, Any] = None):
 
-    # Select optimization direction
+    # select optimization direction
     if optimization_metric in ['Recall', 'Accuracy', 'ROC AUC', 'Precision', 'F1 Score',
                                'MCC', 'R2', 'Balanced Accuracy', 'Specificity', 'PRC AUC']:
         direction = 'maximize'
@@ -270,47 +165,54 @@ def optimize_unit_optuna(model_name: str, dataset_manager: KFoldManager, optimiz
     features = dataset_manager.features_col
 
     best_ensemble = None
+    best_params = None
     best_metric = float('-inf') if direction == 'maximize' else float('inf')
 
     def objective(trial: optuna.trial.Trial):
-        nonlocal best_ensemble, best_metric
+        nonlocal best_ensemble, best_params, best_metric
 
         model_params_fn = get_params_function(model_name)
+        model_params = model_params_fn(trial)
 
         try:
-            model_params = model_params_fn(trial)
-
             unit = prepare_unit(
                 model_name=model_name,
                 model_params=model_params,
                 features=features,
                 task=task,
                 n_jobs=n_jobs,
+                config=config
             )
 
-        except (ValueError, TypeError) as e:
-            print(f"Trial {trial.number} pruned due to invalid parameters: {e}")
-            raise optuna.TrialPruned() from e
-
-        try:
-            ensemble = train_ensemble(unit, dataset_manager, task=task)
-            metric = (ensemble.metrics
-                .filter(pl.col('Set') == 'Validation', pl.col('Metric') == optimization_metric, pl.col('Group') == 'Overall')
-                .select('Mean').item()
+            ensemble = train_ensemble(
+                unit=unit,
+                dataset_manager=dataset_manager,
+                task=task
             )
 
-            is_better = (direction == 'maximize' and metric > best_metric) or \
-                        (direction == 'minimize' and metric < best_metric)
+            metric_df = ensemble.aggregated_metrics_metrics.filter(
+                pl.col("Set") == "Validation",
+                pl.col("Metric") == optimization_metric,
+                pl.col("Group") == "Overall"
+            )
 
-            if is_better:
-                best_metric = metric
-                best_ensemble = ensemble
-            else:
-                del ensemble
+            if metric_df.is_empty():
+                raise ValueError(f"Metric {optimization_metric} was not produced for Validation/Overall")
 
-        except Exception as e:
-            print(f"Trial {trial.number} pruned with params: {model_params}\n{e}")
-            raise optuna.TrialPruned() from e
+            metric = metric_df.select("Mean").item()
+            if not np.isfinite(metric):
+                raise ValueError(f"Trial produced a non-finite {optimization_metric}: {metric}")
+
+        except (ValueError, TypeError, FloatingPointError) as exc:
+            raise optuna.TrialPruned(f"Trial {trial.number} pruned: {exc}") from exc
+
+        is_better = (direction == 'maximize' and metric > best_metric) or \
+                    (direction == 'minimize' and metric < best_metric)
+
+        if is_better:
+            best_metric = metric
+            best_params = model_params.copy()
+            best_ensemble = ensemble
 
         return metric
 
@@ -318,4 +220,9 @@ def optimize_unit_optuna(model_name: str, dataset_manager: KFoldManager, optimiz
     study = optuna.create_study(direction=direction, sampler=sampler)
     study.optimize(objective, n_trials=n_trials)
 
-    return study, best_ensemble
+    completed_trials = [trial for trial in study.trials if trial.state == optuna.trial.TrialState.COMPLETE]
+
+    if not completed_trials or best_ensemble is None or best_params is None:
+        raise RuntimeError(f"Optuna search completed without any successful trials.")
+
+    return study, best_ensemble, best_params
