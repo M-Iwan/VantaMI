@@ -21,7 +21,7 @@ def get_params_function(model_name: str):
         'XGBRegressor': get_params_xgb_regressor,
         'LGBMClassifier': get_params_lgbm_classifier,
         'LGBMRegressor': get_params_lgbm_regressor,
-        'CatBoostClassifier': get_params_cat_classifier,
+        'CatBoostClassifier': get_params_catboost_classifier,
         'CatBoostRegressor': get_params_catboost_regressor,
         'RandomForestClassifier': get_params_random_forest_classifier,
         'RandomForestRegressor': get_params_random_forest_regressor,

@@ -19,6 +19,7 @@
 
 [Removed]
 - All already deprecated code in /deprecated
+- old functions from vantami.ml.optimize - Optuna is currently the main supported framework
 - most of the code from vantami.ml.score module - long superseded by Unit/Ensemble code 
 
 [Broke]

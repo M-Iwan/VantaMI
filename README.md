@@ -19,7 +19,7 @@ Current version: 0.5.0
 
 ```
 vantami/
-├── deprecated/                    Old code; currently empty
+├── deprecated/                    Old code
 ├── dev/                           New stuff / helper files
 ├── dist/                          PyPI distribution files
 ├── environments/                  Environments for special-needs code (CDDD, Mordred) 
