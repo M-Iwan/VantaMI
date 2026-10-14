@@ -168,7 +168,7 @@ class DataTransformer:
     def __repr__(self):
         return (f"<{self.__class__.__name__}>: use_masks: {self.use_masks}, use_clipper: {self.use_clipper}, "
                 f"use_imputer: {self.use_imputer}, use_selector: {self.use_selector}, "
-                f"use_corr: {self.use_corr}, use_scaler: {self.use_scaler}>")
+                f"use_corr: {self.use_corr}, use_scaler: {self.use_scaler}")
 
     def __str__(self):
         return f"<{self.__class__.__name__}>"
@@ -177,6 +177,11 @@ class DataTransformer:
     def validate_features(x_array: npt.NDArray):
         """
         Check validity of passed feature values and convert to 2D numpy array if needed.
+
+        Parameters
+        ----------
+        x_array: npt.NDArray
+            Numpy array corresponding to molecular features. Must be one- or two-dimensional.
         """
         if not isinstance(x_array, np.ndarray):
             raise TypeError(f"Expected numpy.ndarray, got {type(x_array)} instead.")
@@ -193,17 +198,34 @@ class DataTransformer:
     def validate_targets(y_array: npt.NDArray):
         """
         Check validity of passed target values and convert to 1D numpy array if needed.
+
+        Parameters
+        ----------
+        y_array: npt.NDArray
+            Numpy array corresponding to target values. Must be one dimensional.
         """
         if not isinstance(y_array, np.ndarray):
             raise TypeError(f"Expected numpy.ndarray, got {type(y_array)} instead.")
 
-        if (y_array.ndim == 2 and y_array.shape[1] > 1) or y_array.ndim > 2:
+        if y_array.ndim == 0 or (y_array.ndim == 2 and y_array.shape[1] > 1) or y_array.ndim > 2:
             raise ValueError(f"Targets must be convertible to 1D array, got {y_array.ndim} dimensions instead.")
 
         if y_array.ndim == 2 and y_array.shape[1] == 1:
             y_array = y_array.reshape(-1)
 
         return y_array
+
+    @staticmethod
+    def raise_zero(x_array: npt.NDArray, step: str = ""):
+        """
+        Raise an error if the array has zero remaining columns
+        Parameters
+        ----------
+        x_array: npt.NDArray
+            Numpy array to verify
+        """
+        if x_array.shape[1] == 0:
+            raise ValueError(f"No valid features left after < {step} >.")
 
     def reset(self):
         """
@@ -235,7 +257,6 @@ class DataTransformer:
         update: bool, default=False
             Whether to update existing masks if already fit.
         """
-
         if self.masks_fit and not update:
             raise RuntimeError('Cannot fit masks twice. To overwrite this setting, set update to True.')
 
@@ -247,11 +268,7 @@ class DataTransformer:
         self.masks['zero'] = np.nanvar(x_array, axis=0) == 0
 
         self.masks['combined'] = ~(self.masks['missing'] | self.masks['infinite'] | self.masks['zero'] | self.masks['large'])
-        self.n_features['start'] = x_array.shape[1]
-        self.n_features['masks'] = int(self.masks['combined'].sum())
         self.masks_fit = True
-        if self.n_features["masks"] == 0:
-            raise ValueError("No features remain after applying masks.")
 
     def apply_masks(self, x_array: npt.NDArray):
         """
@@ -295,7 +312,18 @@ class DataTransformer:
         if self.corr_fit and not update:
             raise RuntimeError('Cannot fit correlation mask twice. To overwrite this setting, set update to True.')
 
+        if not np.isfinite(threshold) or not 0.0 < threshold <= 1.0:
+            raise ValueError("threshold must be finite and between 0 and 1.")
+
+        if not np.isfinite(frac) or not 0.0 < frac <= 1.0:
+            raise ValueError("frac must be finite and in the interval (0, 1].")
+
         x_array = self.validate_features(x_array)
+        n_samples, n_features = x_array.shape
+
+        if n_samples < 2:
+            raise ValueError("At least two samples are required for correlation analysis.")
+
         self.masks['correlation'] = np.ones(x_array.shape[1], dtype=bool)
 
         if frac < 1.0:
@@ -366,7 +394,6 @@ class DataTransformer:
 
         x_array = self.validate_features(x_array)
         x_array = x_array[:, self.masks['correlation']]
-        self.n_features['correlation'] = x_array.shape[1]
 
         return x_array
 
@@ -494,7 +521,6 @@ class DataTransformer:
 
         x_array = self.validate_features(x_array)
         x_array = self.selector.transform(x_array)
-        self.n_features['selector'] = x_array.shape[1]
         return x_array
 
     def fit_scaler(self, x_array: npt.NDArray, update: bool = False):
@@ -558,16 +584,22 @@ class DataTransformer:
 
         x_array = self.validate_features(x_array)
 
+        if x_array.shape[1] != self.n_features["input"]:
+            raise ValueError(f"Expected the input data to have {self.n_features["input"]} columns, got {x_array.shape[1]}")
+
         if self.use_masks:
             x_array = self.apply_masks(x_array)
+            raise_zero(x_array, "large, infinite or missing masks")
         if self.use_clipper:
             x_array = self.apply_clipper(x_array)
         if self.use_imputer:
             x_array = self.apply_imputer(x_array)
         if self.use_selector:
             x_array = self.apply_selector(x_array)
+            raise_zero(x_array, "low-variance selection")
         if self.use_corr:
             x_array = self.apply_corr(x_array)
+            raise_zero(x_array, "low-variance selection")
         if self.use_scaler:
             x_array = self.apply_scaler(x_array)
 
@@ -591,36 +623,46 @@ class DataTransformer:
             raise RuntimeError("DataTransformer has already been fitted. Create a new transformer or call .reset()")
 
         x_array = self.validate_features(x_array)
+        self.n_features["input"] = x_array.shape[1]
 
         if self.use_masks:
             if not self.masks_fit:
                 self.fit_masks(x_array)
             x_array = self.apply_masks(x_array)
+            self.n_features["masks"] = x_array.shape[1]
+            raise_zero(x_array, "large, infinite or missing masks")
 
         if self.use_clipper:
             if not self.clipper_fit:
                 self.fit_clipper(x_array)
             x_array = self.apply_clipper(x_array)
+            self.n_features["clipper"] = x_array.shape[1]
 
         if self.use_imputer:
             if not self.imputer_fit:
                 self.fit_imputer(x_array)
             x_array = self.apply_imputer(x_array)
+            self.n_features["imputer"] = x_array.shape[1]
 
         if self.use_selector:
             if not self.selector_fit:
                 self.fit_selector(x_array)
             x_array = self.apply_selector(x_array)
+            self.n_features["selector"] = x_array.shape[1]
+            raise_zero(x_array, "low-variance selection")
 
         if self.use_corr:
             if not self.corr_fit:
                 self.fit_corr(x_array)
             x_array = self.apply_corr(x_array)
+            self.n_features["correlation"] = x_array.shape[1]
+            raise_zero(x_array, "low-variance selection")
 
         if self.use_scaler:
             if not self.scaler_fit:
                 self.fit_scaler(x_array)
             x_array = self.apply_scaler(x_array)
+            self.n_features["scaler"] = x_array.shape[1]
 
         self.fitted_ = True
         return x_array
@@ -645,7 +687,6 @@ class DataTransformer:
             raise ValueError(f"Cannot transform an empty DataFrame")
 
         x_array = np.vstack(df[features_col].to_numpy())
-
         x_array = self.validate_features(x_array)
         x_array = self.transform(x_array)
 
@@ -676,7 +717,6 @@ class DataTransformer:
             raise ValueError(f"Cannot transform an empty DataFrame")
 
         x_array = np.vstack(df[features_col].to_numpy())
-
         x_array = self.validate_features(x_array)
         x_array = self.fit_transform(x_array)
 
@@ -751,10 +791,11 @@ def get_transformer_params(features: str):
         "MolEncoder": continuous
     }
 
-    params = features_mapping.get(features, None)
-    if params is None:
+    try:
+        params = features_mapping[features].copy()
+    except KeyError as exc:
         raise KeyError(f'No parameters defined for < {features} >. Please, update the < get_transformer_params > '
-                       f'function at novami.data.transform')
+                       f'function at novami.data.transform') from exc
 
     return params
 
@@ -776,11 +817,14 @@ def merge_arrays_dataframe(df: pl.DataFrame, input_col: List[str], output_col: s
     -------
     pl.DataFrame
     """
+    if not input_col:
+        raise ValueError(f"No input columns provided")
+
     if missing_cols := [col for col in input_col if col not in df.columns]:
         raise ValueError(f"Columns missing from the DataFrame: {missing_cols}")
 
-    if output_col in df.columns:
-        print(f"Overwriting output column: {output_col}")
+    if not all(type(df.schema[col]) is pl.Array for col in input_col):
+        raise TypeError("All input columns must be polars Arrays")
 
     dtypes = {str(df[col].dtype).split(",")[0].split("(")[-1]
               for col in input_col}
