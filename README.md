@@ -15,14 +15,14 @@ The usual versioning conventions are followed loosely, with minor version bumps 
 corresponding to a substantial update to a specific module.
 
 ### Repository Structure
-Last updated on version: 0.4.6
+Current version: 0.5.0
 
 ```
 vantami/
-├── deprecated/                    Old code
+├── deprecated/                    Old code; currently empty
 ├── dev/                           New stuff / helper files
 ├── dist/                          PyPI distribution files
-├── environments/                  Environments for special-need code (CDDD, Mordred) 
+├── environments/                  Environments for special-needs code (CDDD, Mordred) 
 ├── vantami/
 │   ├── cache.py                   Functions for caching required data
 │   ├── api/
@@ -41,6 +41,7 @@ vantami/
 │   │   ├── cluster.py             Clustering using Butina/Murcko/Connected Components algorithms
 │   │   ├── descriptors.py         Descriptor calculations: ECFP, MACCS, Klek, CDDD, RDKit, Mordred, ChemBERTa, MAPC
 │   │   ├── distance.py            Parallel distance matrix / k-neighbors / group k-neighbors calculations
+│   │   ├── embed.py               Feature embedding using PCA, t-SNE, and UMAP
 │   │   ├── filter.py              Filter outliers based on molecular parameters
 │   │   ├── manager.py             Main class for managing data during training and inference
 │   │   ├── partition.py           Partitioning algoriths; convenience wrappers around scikit-learn and cluster.py
@@ -61,9 +62,8 @@ vantami/
 │   │   ├── augood.py              AU-GOOD framework for model's performance evaluation
 │   │   ├── evaluate.py            Code for simple unit/ensemble evaluations
 │   │   ├── models.py              Self-contained, sklearn-compatibile models and ensembles
-│   │   ├── optimize.py            Hyperparameter optimization; functions at the top of the file are outdated
+│   │   ├── optimize.py            Hyperparameter optimization
 │   │   ├── params.py              Pre-defined parameters for Optuna
-│   │   ├── score.py               Functions for scoring models; Outdated, now included with Unit and Ensemble classes
 │   │   ├── select.py              Sequential feature selection; Outdated
 │   │   └── utils.p                Helper functions for building Units from just names of models and descriptors
 │   ├── nlp/  
