@@ -1,4 +1,4 @@
-from typing import Optional, Dict, Union, List
+from typing import Optional, Dict, Union, List, Any
 
 import numpy as np
 import numpy.typing as npt
@@ -123,6 +123,8 @@ class KFoldManager:
 
         self.splits = self.df[self.fold_col].to_numpy()
         all_folds = sorted(np.unique(self.splits))
+        if self.test_fold not in all_folds:
+            raise ValueError(f'Test fold {test_fold} missing from < {self.fold_col} > column')
 
         self.folds = np.array([fold for fold in all_folds if fold != self.test_fold])
 
@@ -289,6 +291,10 @@ class TTManager:
             self.g_array = None
 
         self.splits = self.df[self.set_col].to_numpy()
+
+        if "Train" not in self.splits or "Test" not in self.splits:
+            raise ValueError("Splits must be 'Train' or 'Test'")
+
         self.train_idxs = np.where(self.splits == "Train")[0]
         self.test_idxs = np.where(self.splits == "Test")[0]
 
