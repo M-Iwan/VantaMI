@@ -46,6 +46,11 @@ class Embedder(ABC):
     def validate_features(x_array: npt.NDArray):
         """
         Check validity of passed feature values and convert to 2D numpy array if needed.
+
+        Parameters
+        ----------
+        x_array: npt.NDArray
+            Numpy array corresponding to molecular features. Must be one- or two-dimensional.
         """
         if not isinstance(x_array, np.ndarray):
             raise TypeError(f"Expected numpy.ndarray, got {type(x_array)} instead.")
@@ -57,6 +62,15 @@ class Embedder(ABC):
             x_array = x_array.reshape(1, -1)
 
         return x_array
+
+    def reset(self):
+        """
+        Reset embedder attributes to its initial state.
+        """
+        self.embedder = None
+        self.n_features = {}
+        self.fitted_ = False
+        return self
 
     @abstractmethod
     def transform(self, x_array: npt.NDArray):
@@ -238,7 +252,7 @@ class UMAPEmbedder(Embedder):
     """
 
     def __init__(self, n_components: int = 64, distance_threshold: float = 0.1,
-                 distance_metric: str = "euclidean", random_state: int = 42,
+                 distance_metric: str = "euclidean", n_neighbors: int = 16, random_state: int = 42,
                  kwargs: Optional[dict] = None):
         """
         Parameters
@@ -249,6 +263,8 @@ class UMAPEmbedder(Embedder):
             Minimum distance between points in the embedded space.
         distance_metric: str
             Name of the distance metric to use.
+        n_neighbors: int
+            Balancing parameter for local vs global structure.
         random_state: int
             Random state for reproducibility.
         kwargs: dict or None
@@ -262,13 +278,15 @@ class UMAPEmbedder(Embedder):
 
         self.distance_threshold = distance_threshold
         self.distance_metric = distance_metric
+        self.n_neighbors = n_neighbors
 
     def __repr__(self):
         return (f"<{self.__class__.__name__}>: "
                 f"n_components: {self.n_components}, "
                 f"distance_threshold: {self.distance_threshold}, "
                 f"distance_metric: {self.distance_metric}, "
-                f"random_state: {self.random_state}")
+                f"random_state: {self.random_state}, "
+                f"n_neighbors: {self.n_neighbors}>")
 
     def transform(self, x_array: npt.NDArray):
         """
@@ -319,15 +337,14 @@ class UMAPEmbedder(Embedder):
             "n_components",
             "min_dist",
             "metric",
-            "random_state"
+            "random_state",
+            "n_neighbors"
         }
 
         if reserved_kwargs.intersection(self.kwargs):
             raise ValueError(f"kwargs must not contain managed arguments: {reserved_kwargs}")
 
-        default_kwargs = {
-            "n_neighbors": 16
-        }
+        default_kwargs = {}
         default_kwargs.update(self.kwargs)
 
         x_array = self.validate_features(x_array)
@@ -337,6 +354,7 @@ class UMAPEmbedder(Embedder):
             metric=self.distance_metric,
             min_dist=self.distance_threshold,
             random_state=self.random_state,
+            n_neighbors=self.n_neighbors,
             **default_kwargs
         )
 
@@ -347,6 +365,47 @@ class UMAPEmbedder(Embedder):
         self.fitted_ = True
 
         return x_array
+
+
+def get_embedder_params(features: str, embedder):
+    """
+    Get default embedder parameters for a feature type.
+
+    Parameters
+    ----------
+    features: str
+        Feature name.
+    embedder: type
+        Embedder class.
+
+    Returns
+    -------
+    dict
+        Default embedder parameters.
+    """
+    pca_defaults = {
+        "n_components": 128,
+        "random_state": 42,
+    }
+
+    umap_defaults = {
+        "n_components": 128,
+        "n_neighbors": 16,
+        "distance_threshold": 0.1,
+        "distance_metric": "cosine",
+        "random_state": 42,
+    }
+
+    defaults = {
+        PCAEmbedder: pca_defaults,
+        UMAPEmbedder: umap_defaults,
+    }
+
+    if not isinstance(embedder, Embedder):
+        raise TypeError(f"Supported are PCAEmbedder and UMAPEmbedder.")
+
+    return defaults[embedder].copy()
+
 
 
 def array_2_pca(array: npt.NDArray, n_components: int = 64, random_state: int = 42,
@@ -435,8 +494,9 @@ def dataframe_2_pca(df: pl.DataFrame, tdf: pl.DataFrame = None, features_col: st
     )
 
     if tdf is not None:
+        tdf_emb = pca.transform(np.vstack(tdf[features_col].to_numpy()))
         tdf = tdf.with_columns(
-            pl.Series(output_col, pca.transform(np.vstack(tdf[features_col].to_numpy())))
+            pl.Series(output_col, [array.reshape(-1) for array in np.vsplit(tdf_emb, tdf_emb.shape[0])])
         )
 
     return pca, df, tdf
@@ -642,8 +702,9 @@ def dataframe_2_umap(df: pl.DataFrame, tdf: pl.DataFrame = None, features_col: s
     )
 
     if tdf is not None:
+        tdf_emb = ump.transform(np.vstack(tdf[features_col].to_numpy()))
         tdf = tdf.with_columns(
-            pl.Series(output_col, ump.transform(np.vstack(tdf[features_col].to_numpy())))
+            pl.Series(output_col, [array.reshape(-1) for array in np.vsplit(tdf_emb, tdf_emb.shape[0])])
         )
 
     return ump, df, tdf
