@@ -3,10 +3,25 @@ import optuna
 
 
 def get_params_function(model_name: str):
+    """
+    Get the Optuna parameter suggestion function for a model.
+
+    Parameters
+    ----------
+    model_name: str
+        Name of the model.
+
+    Returns
+    -------
+    callable
+        Function used to suggest model parameters for an Optuna trial.
+    """
     functions = {
         'XGBClassifier': get_params_xgb_classifier,
         'XGBRegressor': get_params_xgb_regressor,
+        'LGBMClassifier': get_params_lgbm_classifier,
         'LGBMRegressor': get_params_lgbm_regressor,
+        'CatBoostClassifier': get_params_cat_classifier,
         'CatBoostRegressor': get_params_catboost_regressor,
         'RandomForestClassifier': get_params_random_forest_classifier,
         'RandomForestRegressor': get_params_random_forest_regressor,
@@ -107,6 +122,73 @@ def get_params_lgbm_regressor(trial: optuna.trial.Trial) -> Dict:
 
     return params
 
+
+def get_params_lgbm_classifier(trial: optuna.trial.Trial) -> Dict:
+    """
+    Suggest values for LGBMClassifier for Optuna, including boosting types.
+    """
+    boosting_type = trial.suggest_categorical("boosting_type", ["gbdt", "dart", "goss"])
+
+    params = {
+        # high-impact parameters
+        "learning_rate": trial.suggest_float("learning_rate", 5e-3, 1e-1, log=True),
+        "n_estimators": trial.suggest_int("n_estimators", 100, 1000, step=25),
+        "num_leaves": trial.suggest_int("num_leaves", 2, 256),
+        "boosting_type": boosting_type,
+
+        # medium-impact parameters
+        "max_depth": trial.suggest_int("max_depth", 2, 12),
+        "subsample": trial.suggest_float("subsample", 0.5, 1.0),
+        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+
+        # low-impact parameters
+        # "min_child_samples": trial.suggest_int("min_child_samples", 5, 100),
+        # "reg_alpha": trial.suggest_float("reg_alpha", 0, 5),
+        # "reg_lambda": trial.suggest_float("reg_lambda", 0, 5),
+        # "min_split_gain": trial.suggest_float("min_split_gain", 0, 5),
+    }
+
+    if boosting_type == "dart":
+        params["drop_rate"] = trial.suggest_float("drop_rate", 0.1, 0.5)
+        params["skip_drop"] = trial.suggest_float("skip_drop", 0.1, 0.5)
+
+    if boosting_type == "goss":
+        # GOSS does not use bagging/subsampling.
+        params.pop("subsample", None)
+        params["top_rate"] = trial.suggest_float("top_rate", 0.1, 0.3)
+        params["other_rate"] = trial.suggest_float("other_rate", 0.05, 0.2)
+
+    return params
+
+
+def get_params_catboost_classifier(trial: optuna.trial.Trial) -> Dict:
+    """
+    Suggest values for CatBoostClassifier for Optuna.
+    """
+    return {
+        # high-impact parameters
+        "iterations": trial.suggest_int("iterations", 100, 1000, step=25),
+        "depth": trial.suggest_int("depth", 2, 12),
+        "learning_rate": trial.suggest_float("learning_rate", 5e-3, 1e-1, log=True),
+
+        # medium-impact parameters
+        "l2_leaf_reg": trial.suggest_float("l2_leaf_reg", 0, 5),
+        "subsample": trial.suggest_float("subsample", 0.5, 1.0),
+        "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.5, 1.0),
+        "grow_policy": trial.suggest_categorical("grow_policy", ["SymmetricTree", "Depthwise", "Lossguide"]),
+
+        # low-impact parameters
+        # "random_strength": trial.suggest_float("random_strength", 0, 5),
+        # "bagging_temperature": trial.suggest_float(
+        #     "bagging_temperature", 0, 10
+        # ),
+        # "border_count": trial.suggest_int("border_count", 32, 255),
+        # "min_data_in_leaf": trial.suggest_int(
+        #     "min_data_in_leaf", 1, 100
+        # ),
+    }
+
+
 def get_params_catboost_regressor(trial: optuna.trial.Trial) -> Dict:
     """
     Suggest values for CatBoostRegressor for optuna
@@ -162,7 +244,7 @@ def get_params_random_forest_regressor(trial: optuna.trial.Trial) -> Dict:
         'max_features': trial.suggest_categorical('max_features', ['sqrt', 'log2', None]),
 
         # medium-impact parameters
-        'criterion': trial.suggest_categorical('criterion', ['friedman_mse', 'squared_error', 'poisson']),
+        'criterion': trial.suggest_categorical('criterion', ['squared_error', 'poisson']),
         'min_samples_leaf': trial.suggest_int('min_samples_leaf', 1, 10),
         'min_samples_split': trial.suggest_int('min_samples_split', 2, 10),
 

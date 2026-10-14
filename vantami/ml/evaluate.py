@@ -14,7 +14,7 @@ def tt_evaluate(model_name: str, df: pl.DataFrame, smiles_col: str, features_col
     Parameters
     ----------
     model_name: str
-        Name of the model to use. Must be included in the novami.ml.utils:get_model function
+        Name of the model to use. Must be included in the vantami.ml.utils:get_model function
     df: pl.DataFrame
         A Polars DataFrame with features, target values, and column denoting set membership.
     smiles_col: str
