@@ -25,7 +25,6 @@ def log(message: str):
 
 def prepare_feature_transformers(features: List[str], config: Optional[Dict] = None) -> TransformerType:
     """
-    TODO: Write basic checks for correctness of passed config.
     Create feature-specific transformation pipelines.
 
     Parameters
@@ -40,11 +39,29 @@ def prepare_feature_transformers(features: List[str], config: Optional[Dict] = N
     TransformerType
         Mapping from feature names to transformation pipelines.
     """
-    config = {} if config is None else config
-    transformers = {}
-
     if isinstance(features, str):
         features = [features]
+
+    if not isinstance(features, list) or not features:
+        raise ValueError("features must be a non-empty list of feature names.")
+
+    if not all(isinstance(feature, str) and feature for feature in features):
+        raise TypeError("All feature names must be non-empty strings.")
+
+    if len(features) != len(set(features)):
+        raise ValueError("Feature names must be unique.")
+
+    if config is None:
+        config = {}
+
+    if not isinstance(config, dict):
+        raise TypeError("config must be a dictionary or None.")
+
+    unknown_features = set(config).difference(features)
+    if unknown_features:
+        raise ValueError(f"Configuration contains unknown feature names: {unknown_features}")
+
+    transformers = {}
 
     default_transformers = {
         "transformer": DataTransformer,
@@ -59,7 +76,11 @@ def prepare_feature_transformers(features: List[str], config: Optional[Dict] = N
             transformers[feature] = None
             continue
 
-        if feature_config in default_transformers:
+        if isinstance(feature_config, str):
+            if feature_config not in default_transformers:
+                raise ValueError(f"Unknown default transformer < {feature_config} > for feature < {feature} >."
+                    f"Expected one of: {list(default_transformers)}.")
+
             transformer_class = default_transformers[feature_config]
 
             if transformer_class is DataTransformer:
@@ -70,9 +91,31 @@ def prepare_feature_transformers(features: List[str], config: Optional[Dict] = N
             transformers[feature] = transformer_class(**params)
             continue
 
+        if not isinstance(feature_config, (list, tuple)) or not feature_config:
+            raise TypeError(
+                f"Configuration for feature < {feature} > must be None, a default-transformer name, "
+                f"or a non-empty list of (transformer_class, transformer_config) tuples.")
+
         pipeline = []
 
-        for transformer_class, transformer_config in feature_config:
+        for transformer_spec in feature_config:
+            if not isinstance(transformer_spec, tuple) or len(transformer_spec) != 2:
+                raise TypeError(
+                    f"Each pipeline entry for feature < {feature} > must be a "
+                    "(transformer_class, transformer_config) tuple."
+                )
+
+            transformer_class, transformer_config = transformer_spec
+
+            if transformer_class not in (DataTransformer, PCAEmbedder, UMAPEmbedder):
+                raise TypeError(f"Unsupported transformer class < {transformer_class} > for feature < {feature} >.")
+
+            if transformer_config is None:
+                transformer_config = {}
+
+            if not isinstance(transformer_config, dict):
+                raise TypeError(f"Transformer configuration for feature < {feature} > must be a dictionary or None.")
+
             if transformer_class is DataTransformer:
                 params = get_transformer_params(feature)
             else:
