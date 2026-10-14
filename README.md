@@ -64,6 +64,7 @@ vantami/
 │   │   ├── models.py              Self-contained, sklearn-compatibile models and ensembles
 │   │   ├── optimize.py            Hyperparameter optimization
 │   │   ├── params.py              Pre-defined parameters for Optuna
+│   │   ├── score.py               Additional performance metrics
 │   │   ├── select.py              Sequential feature selection; Outdated
 │   │   └── utils.p                Helper functions for building Units from just names of models and descriptors
 │   ├── nlp/  

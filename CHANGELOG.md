@@ -19,7 +19,7 @@
 
 [Removed]
 - All already deprecated code in /deprecated
-- vantami.ml.score module - long superseded by Unit/Ensemble code 
+- most of the code from vantami.ml.score module - long superseded by Unit/Ensemble code 
 
 [Broke]
 - Probably something broke along the way, these will be addressed in sub-updates to version 0.5.0
