@@ -326,14 +326,10 @@ class DataTransformer:
 
         self.masks['correlation'] = np.ones(x_array.shape[1], dtype=bool)
 
-        if frac < 1.0:
-            if frac <= 0.0 or frac > 1.0:
-                raise ValueError(f"Fraction {frac} must be between 0 and 1.")
-
-            sample_size = max(floor(x_array.shape[0] * frac), 2)
-            rng = np.random.default_rng(seed=self.random_state_)
-            sample_indices = rng.choice(x_array.shape[0], size=sample_size, replace=False)
-            x_array = x_array[sample_indices, :]
+        sample_size = max(floor(x_array.shape[0] * frac), 2)
+        rng = np.random.default_rng(seed=self.random_state_)
+        sample_indices = rng.choice(x_array.shape[0], size=sample_size, replace=False)
+        x_array = x_array[sample_indices, :]
 
         correlation_matrix = np.abs(np.triu(np.corrcoef(x_array.T), k=1))
         correlation_matrix = np.nan_to_num(correlation_matrix, nan=0.0)
@@ -585,21 +581,21 @@ class DataTransformer:
         x_array = self.validate_features(x_array)
 
         if x_array.shape[1] != self.n_features["input"]:
-            raise ValueError(f"Expected the input data to have {self.n_features["input"]} columns, got {x_array.shape[1]}")
+            raise ValueError(f"Expected the input data to have {self.n_features['input']} columns, got {x_array.shape[1]}")
 
         if self.use_masks:
             x_array = self.apply_masks(x_array)
-            raise_zero(x_array, "large, infinite or missing masks")
+            self.raise_zero(x_array, "large, infinite or missing masks")
         if self.use_clipper:
             x_array = self.apply_clipper(x_array)
         if self.use_imputer:
             x_array = self.apply_imputer(x_array)
         if self.use_selector:
             x_array = self.apply_selector(x_array)
-            raise_zero(x_array, "low-variance selection")
+            self.raise_zero(x_array, "low-variance selection")
         if self.use_corr:
             x_array = self.apply_corr(x_array)
-            raise_zero(x_array, "low-variance selection")
+            self.raise_zero(x_array, "correlation filtering")
         if self.use_scaler:
             x_array = self.apply_scaler(x_array)
 
@@ -630,7 +626,7 @@ class DataTransformer:
                 self.fit_masks(x_array)
             x_array = self.apply_masks(x_array)
             self.n_features["masks"] = x_array.shape[1]
-            raise_zero(x_array, "large, infinite or missing masks")
+            self.raise_zero(x_array, "large, infinite or missing masks")
 
         if self.use_clipper:
             if not self.clipper_fit:
@@ -649,14 +645,14 @@ class DataTransformer:
                 self.fit_selector(x_array)
             x_array = self.apply_selector(x_array)
             self.n_features["selector"] = x_array.shape[1]
-            raise_zero(x_array, "low-variance selection")
+            self.raise_zero(x_array, "low-variance selection")
 
         if self.use_corr:
             if not self.corr_fit:
                 self.fit_corr(x_array)
             x_array = self.apply_corr(x_array)
             self.n_features["correlation"] = x_array.shape[1]
-            raise_zero(x_array, "low-variance selection")
+            self.raise_zero(x_array, "correlation filtering")
 
         if self.use_scaler:
             if not self.scaler_fit:

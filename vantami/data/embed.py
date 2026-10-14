@@ -367,14 +367,12 @@ class UMAPEmbedder(Embedder):
         return x_array
 
 
-def get_embedder_params(features: str, embedder):
+def get_embedder_params(embedder):
     """
     Get default embedder parameters for a feature type.
 
     Parameters
     ----------
-    features: str
-        Feature name.
     embedder: type
         Embedder class.
 
@@ -401,11 +399,10 @@ def get_embedder_params(features: str, embedder):
         UMAPEmbedder: umap_defaults,
     }
 
-    if not isinstance(embedder, Embedder):
-        raise TypeError(f"Supported are PCAEmbedder and UMAPEmbedder.")
+    if embedder not in defaults:
+        raise TypeError(f"Embedder must be PCAEmbedder or UMAPEmbedder.")
 
     return defaults[embedder].copy()
-
 
 
 def array_2_pca(array: npt.NDArray, n_components: int = 64, random_state: int = 42,

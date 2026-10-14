@@ -8,7 +8,7 @@ import numpy.typing as npt
 import polars as pl
 
 from vantami.data.transform import DataTransformer, get_transformer_params
-from vantami.data.embed import PCAEmbedder, UMAPEmbedder, get_embedder_params
+from vantami.data.embed import Embedder, PCAEmbedder, UMAPEmbedder, get_embedder_params
 from vantami.ml.params import *
 from vantami.ml.models import RegressorUnit, ClassifierUnit
 
@@ -86,7 +86,7 @@ def prepare_feature_transformers(features: List[str], config: Optional[Dict] = N
             if transformer_class is DataTransformer:
                 params = get_transformer_params(feature)
             else:
-                params = get_embedder_params(feature, transformer_class)
+                params = get_embedder_params(transformer_class)
 
             transformers[feature] = transformer_class(**params)
             continue

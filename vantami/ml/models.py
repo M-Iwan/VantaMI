@@ -286,7 +286,7 @@ class Unit(ABC):
         """
         Reset all transformers to their initial states to permit refitting.
         """
-        for name, transformers in self.transformers.items():
+        for transformers in self.transformer.values():
             for transformer in transformers:
                 transformer.reset()
 
@@ -809,12 +809,22 @@ class Ensemble(ABC):
         if not isinstance(unit, Unit):
             raise TypeError('Unit must be of type Unit')
 
+        if weight is not None:
+            if not np.isfinite(weight):
+                raise ValueError("Weight must be finite.")
+
+            if weight < 0:
+                raise ValueError("Weight must be non-negative.")
+
         if not self._has_units:
             self.units.append(unit)
             self.unit_type = type(unit)
             self._has_units = True
 
             if weight is not None:
+                if weight == 0:
+                    raise ValueError("Weight cannot be zero.")
+
                 self.raw_weights = np.array([weight], dtype=float)
                 self.weights = np.array([1.0], dtype=float)
                 self._has_weights = True

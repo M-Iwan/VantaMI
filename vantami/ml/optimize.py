@@ -136,7 +136,12 @@ def train_ensemble(unit: Unit, dataset_manager: KFoldManager, task: str = 'regre
     ensemble: Ensemble
     """
 
-    ensemble = {'regression': RegressorEnsemble, 'classification': ClassifierEnsemble}.get(task)()
+    ensemble_class = {"regression": RegressorEnsemble, "classification": ClassifierEnsemble}.get(task)
+
+    if ensemble_class is None:
+        raise ValueError(f'Task should be either "regression" or "classification", got < {task} > instead.')
+
+    ensemble = ensemble_class()
 
     for fold in dataset_manager.folds:
         train_data = dataset_manager.get_train_data(fold)
@@ -190,7 +195,7 @@ def optuna_search(model_name: str, dataset_manager: KFoldManager, optimization_m
                 task=task
             )
 
-            metric_df = ensemble.aggregated_metrics_metrics.filter(
+            metric_df = ensemble.aggregated_metrics.filter(
                 pl.col("Set") == "Validation",
                 pl.col("Metric") == optimization_metric,
                 pl.col("Group") == "Overall"
