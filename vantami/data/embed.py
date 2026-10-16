@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Optional
+import warnings
 
 import numpy as np
 import numpy.typing as npt
@@ -226,10 +227,13 @@ class PCAEmbedder(Embedder):
 
         max_components = min(x_array.shape[0], x_array.shape[1])
         if self.n_components > max_components:
-            raise ValueError(
-                f"n_components={self.n_components} must not exceed "
-                f"min(n_samples, n_features)={max_components}."
+            warnings.warn(
+                f"Requested n_components={self.n_components}, but the maximum for input shape {x_array.shape} is"
+                f"{max_components}. Using n_components={max_components}.",
+                UserWarning,
+                stacklevel=2
             )
+            self.n_components = max_components
 
         self.embedder = PCA(
             n_components=self.n_components,
@@ -348,6 +352,16 @@ class UMAPEmbedder(Embedder):
         default_kwargs.update(self.kwargs)
 
         x_array = self.validate_features(x_array)
+
+        max_components = min(x_array.shape[0], x_array.shape[1])
+        if self.n_components > max_components:
+            warnings.warn(
+                f"Requested n_components={self.n_components}, but the maximum for input shape {x_array.shape} is"
+                f"{max_components}. Using n_components={max_components}.",
+                UserWarning,
+                stacklevel=2
+            )
+            self.n_components = max_components
 
         self.embedder = umap.UMAP(
             n_components=self.n_components,

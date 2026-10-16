@@ -1,3 +1,13 @@
+# [0.5.1]: 16-10-2026
+[Added]
+- XTB calculations support for Molecule in vantami.chemistry.molecule
+
+[Changed]
+- All Embedders limit the n_components to max(n_components, n_samples)
+
+[Fixed]
+- Fixed all (probably) bugs introduced in the previous version
+
 # [0.5.0]: 14-10-2026
 [Added]
 - Extended Unit and Ensemble functionality for multi-modal modeling
