@@ -122,7 +122,7 @@ def dataframe_2_murcko(df: pl.DataFrame, smiles_col: str = "SMILES", output_col:
     if not smiles:
         return df.with_columns(pl.lit(None).alias(output_col))
 
-    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=60, backend='loky')(
+    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=120, backend='loky')(
         delayed(smiles_2_murcko)(smiles=smi, generic=generic) for smi in smiles_batches
     )
 
@@ -202,7 +202,7 @@ def dataframe_2_inchi(df: pl.DataFrame, smiles_col: str = "SMILES", output_col: 
     if not smiles:
         return df.with_columns(pl.lit(None).alias(output_col))
 
-    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=60, backend='loky')(
+    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=120, backend='loky')(
         delayed(smiles_2_inchi)(smiles=smi) for smi in smiles_batches
     )
 
@@ -282,7 +282,7 @@ def dataframe_2_inchi_key(df: pl.DataFrame, smiles_col: str = "SMILES", output_c
     if not smiles:
         return df.with_columns(pl.lit(None).alias(output_col))
 
-    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=60, backend='loky')(
+    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=120, backend='loky')(
         delayed(smiles_2_inchi_key)(smiles=smi) for smi in smiles_batches
     )
 
@@ -387,7 +387,7 @@ def dataframe_2_ecfp(df: pl.DataFrame, smiles_col: str = 'SMILES', output_col: s
     if not smiles:
         return df.with_columns(pl.lit(None).alias(output_col))
 
-    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=60, backend='loky')(
+    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=120, backend='loky')(
         delayed(smiles_2_ecfp)(smiles=smi, radius=radius, nbits=nbits, count=count) for smi in smiles_batches
     )
 
@@ -487,7 +487,7 @@ def dataframe_2_daylight(df: pl.DataFrame, smiles_col: str = 'SMILES', output_co
     if not smiles:
         return df.with_columns(pl.lit(None).alias(output_col))
 
-    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=60, backend='loky')(
+    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=120, backend='loky')(
         delayed(smiles_2_daylight)(smiles=smi, min_path=min_path, max_path=max_path, nbits=nbits, count=count) for smi in smiles_batches
     )
 
@@ -587,7 +587,7 @@ def dataframe_2_atompair(df: pl.DataFrame, smiles_col: str = 'SMILES', output_co
     if not smiles:
         return df.with_columns(pl.lit(None).alias(output_col))
 
-    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=60, backend='loky')(
+    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=120, backend='loky')(
         delayed(smiles_2_atompair)(smiles=smi, min_distance=min_distance, max_distance=max_distance, nbits=nbits, count=count)
         for smi in smiles_batches
     )
@@ -677,7 +677,7 @@ def dataframe_2_maccs(df: pl.DataFrame, smiles_col: str = 'SMILES', output_col: 
     if not smiles:
         return df.with_columns(pl.lit(None).alias(output_col))
 
-    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=60, backend='loky')(
+    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=120, backend='loky')(
         delayed(smiles_2_maccs)(smiles=smi) for smi in smiles_batches
     )
 
@@ -720,6 +720,11 @@ def smiles_2_klek(smiles: Union[str, List[str], npt.NDArray[str]]):
     Returns
     -------
     Union[npt.NDArray, List[npt.NDArray]]
+
+    Notes
+    -----
+    [1] Paper: J. Klekota, F.P. Roth, "Chemical substructures that enrich for biological activity",
+        Bioinformatics, Vol. 24, Iss. 21 (2008), https://doi.org/10.1093/bioinformatics/btn479
     """
 
     klekota_smarts = joblib.load(files('vantami.files').joinpath('klekota_roth.joblib'))
@@ -756,6 +761,11 @@ def dataframe_2_klek(df: pl.DataFrame, smiles_col: str = 'SMILES', output_col: s
     -------
     df : pl.DataFrame
         A polars Dataframe with added Klek column.
+
+    Notes
+    -----
+    [1] Paper: J. Klekota, F.P. Roth, "Chemical substructures that enrich for biological activity",
+        Bioinformatics, Vol. 24, Iss. 21 (2008), https://doi.org/10.1093/bioinformatics/btn479
     """
 
     smiles, n_jobs, smiles_batches = _prepare_batches(
@@ -764,7 +774,7 @@ def dataframe_2_klek(df: pl.DataFrame, smiles_col: str = 'SMILES', output_col: s
     if not smiles:
         return df.with_columns(pl.lit(None).alias(output_col))
 
-    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=60, backend='loky')(
+    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=120, backend='loky')(
         delayed(smiles_2_klek)(smiles=smi) for smi in smiles_batches
     )
 
@@ -858,7 +868,7 @@ def dataframe_2_rdkit(df: pl.DataFrame, smiles_col: str = 'SMILES', output_col: 
     if not smiles:
         return df.with_columns(pl.lit(None).alias(output_col))
 
-    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=60, backend='loky')(
+    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=120, backend='loky')(
         delayed(smiles_2_rdkit)(smiles=smi, decimals=decimals) for smi in smiles_batches
     )
 
@@ -876,7 +886,6 @@ def dataframe_2_rdkit(df: pl.DataFrame, smiles_col: str = 'SMILES', output_col: 
     df = df.join(smiles_df, on=smiles_col, how='left')
 
     return df
-
 
 
 def _to_common_rdkit(smiles: str, decimals: int, mod):
@@ -968,7 +977,7 @@ def dataframe_2_common_rdkit(df: pl.DataFrame, smiles_col: str = 'SMILES', decim
     if not smiles:
         return df.with_columns([pl.lit(None).alias(o_col) for o_col in keys])
 
-    out_batches = Parallel(n_jobs=n_jobs, verbose=1, timeout=60, backend='loky')(
+    out_batches = Parallel(n_jobs=n_jobs, verbose=1, timeout=120, backend='loky')(
         delayed(smiles_2_common_rdkit)(smiles=smi, decimals=decimals) for smi in smiles_batches
     )
 
@@ -1006,6 +1015,12 @@ def smiles_2_chemberta(smiles: Union[str, List[str], npt.NDArray[str]], decimals
     Returns
     -------
     Union[np.ndarray, List[np.ndarray]]
+
+    Notes
+    -----
+    [1] Paper: S. Chithrananda et al., "ChemBERTa: Large-Scale Self-Suprvised Pretraining for Molecular Property
+        Prediction", NeurIPS 2020 ML for Molecules Workshop, https://arxiv.org/abs/2010.09885
+    [2] Implementation: https://huggingface.co/DeepChem/ChemBERTa-100M-MLM
     """
     try:
         import torch
@@ -1065,6 +1080,12 @@ def dataframe_2_chemberta(df: pl.DataFrame, smiles_col: str = 'SMILES', output_c
     -------
     df : pl.DataFrame
         A polars Dataframe with added ChemBERTa column.
+
+    Notes
+    -----
+    [1] Paper: S. Chithrananda et al., "ChemBERTa: Large-Scale Self-Suprvised Pretraining for Molecular Property
+        Prediction", NeurIPS 2020 ML for Molecules Workshop, https://arxiv.org/abs/2010.09885
+    [2] Implementation: https://huggingface.co/DeepChem/ChemBERTa-100M-MLM
     """
 
     try:
@@ -1081,7 +1102,7 @@ def dataframe_2_chemberta(df: pl.DataFrame, smiles_col: str = 'SMILES', output_c
     if not smiles:
         return df.with_columns(pl.lit(None).alias(output_col))
 
-    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=60, backend='loky')(
+    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=120, backend='loky')(
         delayed(smiles_2_chemberta)(smiles=smi, decimals=decimals) for smi in smiles_batches
     )
 
@@ -1136,6 +1157,12 @@ def smiles_2_molencoder(smiles: Union[str, List[str], npt.NDArray[str]], decimal
     Returns
     -------
     Union[np.ndarray, List[np.ndarray]]
+
+    Notes
+    -----
+    [1] Paper: F. Krüger et al., "MolEncoder: towards optimal masked language modeling for molecules",
+        Digital Discovery, Vol. 4, Iss. 12, (2025), https://doi.org/10.1039/d5dd00369e
+    [2] Implementation: https://huggingface.co/fabikru/MolEncoder
     """
     try:
         import torch
@@ -1195,6 +1222,12 @@ def dataframe_2_molencoder(df: pl.DataFrame, smiles_col: str = 'SMILES', output_
     -------
     df : pl.DataFrame
         A polars Dataframe with added MolEncoder column.
+
+    Notes
+    -----
+    [1] Paper: F. Krüger et al., "MolEncoder: towards optimal masked language modeling for molecules",
+        Digital Discovery, Vol. 4, Iss. 12, (2025), https://doi.org/10.1039/d5dd00369e
+    [2] Implementation: https://huggingface.co/fabikru/MolEncoder
     """
 
     try:
@@ -1211,7 +1244,7 @@ def dataframe_2_molencoder(df: pl.DataFrame, smiles_col: str = 'SMILES', output_
     if not smiles:
         return df.with_columns(pl.lit(None).alias(output_col))
 
-    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=60, backend='loky')(
+    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=120, backend='loky')(
         delayed(smiles_2_molencoder)(smiles=smi, decimals=decimals) for smi in smiles_batches
     )
 
@@ -1233,8 +1266,7 @@ def dataframe_2_molencoder(df: pl.DataFrame, smiles_col: str = 'SMILES', output_
 
 def get_molencoder():
     """
-    Download the MolEncoder model and tokenizer and save them in .cache.
-    # Developed by Fabian Kruger
+    Download the MolEncoder model and tokenizer and save them in .cache
     """
     try:
         import truststore
@@ -1284,6 +1316,12 @@ def smiles_2_mapc(smiles: Union[str, List[str], npt.NDArray[str]], radius: int =
     Returns
     -------
     Union[np.ndarray, List[np.ndarray]]
+
+    Notes
+    -----
+    [1] Paper: M. Orsi, J-L. Reymond, "One chiral fingerprint to find them all",
+        Journal of Cheminformatics, Vol. 16, Art. 53 (2024), https://doi.org/10.1021/acs.jcim.6c01542
+    [2] Implementation: https://github.com/markusorsi/mapchiral
     """
     try:
         from mapchiral.mapchiral import encode
@@ -1326,6 +1364,12 @@ def dataframe_2_mapc(df: pl.DataFrame, smiles_col: str = 'SMILES', output_col: s
     -------
     df : pl.DataFrame
         A polars Dataframe with added MAPC column.
+
+    Notes
+    -----
+    [1] Paper: M. Orsi, J-L. Reymond, "One chiral fingerprint to find them all",
+        Journal of Cheminformatics, Vol. 16, Art. 53 (2024), https://doi.org/10.1021/acs.jcim.6c01542
+    [2] Implementation: https://github.com/markusorsi/mapchiral
     """
 
     smiles, n_jobs, smiles_batches = _prepare_batches(
@@ -1334,8 +1378,117 @@ def dataframe_2_mapc(df: pl.DataFrame, smiles_col: str = 'SMILES', output_col: s
     if not smiles:
         return df.with_columns(pl.lit(None).alias(output_col))
 
-    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=60, backend='loky')(
+    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=120, backend='loky')(
         delayed(smiles_2_mapc)(smiles=smi, radius=radius, nbits=nbits) for smi in smiles_batches
+    )
+
+    smiles_df = pl.DataFrame(
+        {
+            smiles_col: smiles,
+            output_col: list(chain.from_iterable(out))
+        },
+        schema={
+            smiles_col: pl.String,
+            output_col: pl.Array(pl.UInt64, shape=nbits)
+        }
+    )
+
+    df = df.join(smiles_df, on=smiles_col, how='left')
+
+    return df
+
+
+def _to_mordred(smiles: str, calc: mordred.Calculator):
+    """
+    Convert a single SMILES to Mordred descriptors.
+    """
+    if (mol := _to_mol(smiles)) is None:
+        print(f"Unable to construct valid molecule from {smiles}")
+        return None
+
+    return np.array(calc(mol), dtype=np.float64)
+
+
+def smiles_2_mordred(smiles: Union[str, List[str], npt.NDArray[str]], ignore_3D: bool = True):
+    """
+    Convert SMILES to Mordred descriptors.
+
+    Parameters
+    ----------
+    smiles: Union[str, List[str], npt.NDArray[str]]
+        A valid SMILES or list of valid SMILES strings.
+    ignore_3D: Optional[bool]
+        Whether to ignore 3D descriptors.
+
+    Returns
+    -------
+    Union[np.ndarray, List[np.ndarray]]
+
+    Notes
+    -----
+    [1] From paper: H. Moriwaki et al. "Mordred: a molecular descriptor calculator",
+        Journal of Cheminformatics, vol. 10, art. 4 (2018), https://doi.org/10.1186/s13321-018-0258-y
+    [2] Original implementation: https://github.com/mordred-descriptor/mordred
+    [3] Implementation: https://github.com/JacksonBurns/mordred-community
+    """
+    try:
+        from mordred import Calculator, descriptors
+    except ImportError as exc:
+        raise ImportError(f"Function < smiles_2_mordred > requires < mordredcommunity, networkx > libraries:\n{exc}")
+
+    calc = Calculator(descriptors, ignore_3D=ignore_3D)
+
+    if isinstance(smiles, str):
+        return _to_mordred(smiles=smiles, calc=calc)
+
+    elif isinstance(smiles, (list, np.ndarray)):
+        return [_to_mapc(smiles=smi, calc=calc) for smi in smiles]
+
+    else:
+        raise TypeError(f"Expected smiles to be str or Union[List[str], npt.NDArray[str]], got {type(smiles)} instead")
+
+
+def dataframe_2_mordred(df: pl.DataFrame, smiles_col: str = 'SMILES', output_col: str = 'Mordred',
+                        ignore_3D: bool = True, n_jobs: int = 1, batch_size: int = 512):
+    """
+    Convert SMILES in a DataFrame to MAPC (MAP Chiral) fingerprints.
+
+    Parameters
+    ----------
+    df : pl.DataFrame
+        A polars DataFrame.
+    smiles_col : str, optional
+        Name of the column containing SMILES strings.
+    output_col : str, optional
+        Name of column for the output.
+    ignore_3D: Optional[bool]
+        Whether to ignore 3D descriptors.
+    n_jobs: int, optional
+        Number of cores to use for calculations.
+    batch_size: int, optional
+        Number of SMILES per batch.
+
+    Returns
+    -------
+    df : pl.DataFrame
+        A polars Dataframe with added Mordred column.
+
+    Notes
+    -----
+    [1] From paper: H. Moriwaki et al. "Mordred: a molecular descriptor calculator",
+        Journal of Cheminformatics, vol. 10, art. 4 (2018), https://doi.org/10.1186/s13321-018-0258-y
+    [2] Original implementation: https://github.com/mordred-descriptor/mordred
+    [3] Implementation: https://github.com/JacksonBurns/mordred-community
+    """
+
+    smiles, n_jobs, smiles_batches = _prepare_batches(
+        df=df, smiles_col=smiles_col, n_jobs=n_jobs, batch_size=batch_size
+    )
+    if not smiles:
+        return df.with_columns(pl.lit(None).alias(output_col))
+
+    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=120, backend='loky')(
+        delayed(smiles_2_mordred)(smiles=smi, ignore_3D=ignore_3D) for smi in smiles_batches
     )
 
     smiles_df = pl.DataFrame(
@@ -1357,69 +1510,6 @@ def dataframe_2_mapc(df: pl.DataFrame, smiles_col: str = 'SMILES', output_col: s
 # ============ #
 # Pain section #
 # ============ #
-
-def dataframe_2_mordred(df: Union[pd.DataFrame, pl.DataFrame], smiles_col: str = 'SMILES', desc_col: str = 'Mordred',
-                        path_source: str = f'src/src_files/mordred_paths.json', decimals: int = 5):
-    """
-    Convert SMILES in dataframe to Mordred descriptors.
-    TODO: Update similar to other functions once the osmordred package works
-
-    Parameters
-    ----------
-    df : Union[pd.DataFrame, pl.DataFrame]
-        A pandas/polars DataFrame with data.
-    smiles_col : str
-        Name of column with SMILES.
-    desc_col : str
-        Name of column to which add calculated descriptors.
-    path_source : str
-        Path to mordred_paths.json file.
-    decimals: int
-        Number of decimals to keep.
-
-    Returns
-    -------
-    df : Union[pd.DataFrame, pl.DataFrame]
-        A pandas/polars Dataframe with added column holding Mordred descriptors for given SMILES.
-    """
-    try:
-        from vantami import read_pd, write_pd
-        import pandas as pd
-    except ImportError as exc:
-        raise ImportError(f"Error during import:\n{exc}")
-
-    def postprocess(entry, decimals_):
-        if not isinstance(entry, (np.ndarray, list)):
-            return np.nan
-        if isinstance(entry, np.ndarray):
-            return np.round(entry.reshape(-1), decimals_)
-        if isinstance(entry, list):
-            return [np.round(array.reshape(-1), decimals_) for array in entry]
-        else:
-            raise TypeError(f"Expected numpy array or list, got {type(entry)} instead.")
-
-    with open(path_source, 'r') as file:
-        paths = json.load(file)
-
-    command = (f"{paths['python']} {paths['wrapper']} --input {paths['input']} --output {paths['output']} "
-               f"--smiles_col {smiles_col} --descriptor_col {desc_col}")
-
-    if is_polars := isinstance(df, pl.DataFrame):
-        df = df.to_pandas()
-
-    # pack the lists to strings so that they don't get broken -,-
-    df.loc[:, smiles_col] = df[smiles_col].apply(lambda entry: ' : '.join(entry) if isinstance(entry, list) else entry)
-    write_pd(df, paths['input'])
-
-    os.system(command)
-
-    df = read_pd(paths['output'])
-    df.loc[:, desc_col] = df[desc_col].apply(postprocess, decimals_=decimals)
-
-    if is_polars:
-        df = pl.from_pandas(df)
-
-    return df
 
 
 def dataframe_2_cddd(df: Union[pd.DataFrame, pl.DataFrame], cddd_paths: str, smiles_col: str = 'SMILES',
