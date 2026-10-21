@@ -1029,7 +1029,7 @@ def smiles_2_chemberta(smiles: Union[str, List[str], npt.NDArray[str]], decimals
 
     try:
         from transformers import AutoTokenizer, AutoModel, logging
-        from vantami.cache import get_chemberta_model_path, get_chemberta_tokenizer_path
+        from vantami.paths import get_chemberta_model_path, get_chemberta_tokenizer_path
     except ImportError as exc:
         raise ImportError(f"Function < smiles_2_chemberta > requires < transformers > library:\n{exc}")
 
@@ -1089,9 +1089,9 @@ def dataframe_2_chemberta(df: pl.DataFrame, smiles_col: str = 'SMILES', output_c
     """
 
     try:
-        from vantami.cache import get_chemberta_model_path, get_chemberta_tokenizer_path
+        from vantami.paths import get_chemberta_model_path, get_chemberta_tokenizer_path
     except ImportError as exc:
-        raise ImportError(f"Function < dataframe_2_chemberta > requires the ChemBERTa cache utilities:\n{exc}")
+        raise ImportError(f"Function < dataframe_2_chemberta > requires the ChemBERTa paths utilities:\n{exc}")
 
     if not get_chemberta_model_path().is_file() or not get_chemberta_tokenizer_path().is_file():
         get_chemberta()
@@ -1124,12 +1124,12 @@ def dataframe_2_chemberta(df: pl.DataFrame, smiles_col: str = 'SMILES', output_c
 
 def get_chemberta():
     """
-    Download the ChemBERTa model and tokenizer and save them in .cache.
+    Download the ChemBERTa model and tokenizer and save them in .vantami
     """
     try:
         import truststore
         from transformers import AutoTokenizer, AutoModel, logging
-        from vantami.cache import get_chemberta_model_path, get_chemberta_tokenizer_path
+        from vantami.paths import get_chemberta_model_path, get_chemberta_tokenizer_path
     except ImportError as exc:
         raise ImportError(f"Function < get_chemberta > requires transformers and truststore libraries:\n{exc}")
 
@@ -1171,7 +1171,7 @@ def smiles_2_molencoder(smiles: Union[str, List[str], npt.NDArray[str]], decimal
 
     try:
         from transformers import AutoTokenizer, AutoModel, logging
-        from vantami.cache import get_molencoder_model_path, get_molencoder_tokenizer_path
+        from vantami.paths import get_molencoder_model_path, get_molencoder_tokenizer_path
     except ImportError as exc:
         raise ImportError(f"Function < smiles_2_molencoder > requires < transformers > library:\n{exc}")
 
@@ -1231,9 +1231,9 @@ def dataframe_2_molencoder(df: pl.DataFrame, smiles_col: str = 'SMILES', output_
     """
 
     try:
-        from vantami.cache import get_molencoder_model_path, get_molencoder_tokenizer_path
+        from vantami.paths import get_molencoder_model_path, get_molencoder_tokenizer_path
     except ImportError as exc:
-        raise ImportError(f"Function < dataframe_2_molencoder > requires the MolEncoder cache utilities:\n{exc}")
+        raise ImportError(f"Function < dataframe_2_molencoder > requires the MolEncoder paths utilities:\n{exc}")
 
     if not get_molencoder_model_path().is_file() or not get_molencoder_tokenizer_path().is_file():
         get_molencoder()
@@ -1266,12 +1266,12 @@ def dataframe_2_molencoder(df: pl.DataFrame, smiles_col: str = 'SMILES', output_
 
 def get_molencoder():
     """
-    Download the MolEncoder model and tokenizer and save them in .cache
+    Download the MolEncoder model and tokenizer and save them in .vantami
     """
     try:
         import truststore
         from transformers import AutoTokenizer, AutoModel, logging
-        from vantami.cache import get_molencoder_model_path, get_molencoder_tokenizer_path
+        from vantami.paths import get_molencoder_model_path, get_molencoder_tokenizer_path
     except ImportError as exc:
         raise ImportError(f"Function < get_molencoder > requires transformers and truststore libraries:\n{exc}")
 
