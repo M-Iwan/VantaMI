@@ -5,12 +5,17 @@ ROOT = Path(__file__).parent
 README = ROOT / "README.md"
 
 package_data: dict[str, list[str]] = {
-    "vantami": ["files/klekota_roth.joblib"],
+    "vantami": [
+        "files/klekota_roth.joblib",
+        "files/unipka/build_unipka.sh",
+        "files/unipka/test_unipka.sh",
+        "files/unipka/run_unipka.sh"
+    ],
 }
 
 setup(
     name="vantami",
-    version="0.5.1",
+    version="0.5.2.rc1",
     author="Mateusz Iwan",
     author_email="mateusz.iwan@hotmail.com",
     description="A collection of ML/AI tools for chemistry applications.",
