@@ -3,15 +3,16 @@
 # Run Uni-pKa inference on a user-supplied TSV file.
 #
 # Usage:
-#   ./run_unipka.sh ./input.tsv ./output.tsv [gpu_id] [pH]
+#   ./run_unipka.sh ./input.tsv ./output_dir [gpu_id] [pH]
 #
 # Input requirements:
 #   - Tab-separated .tsv file
 #   - Header row containing a column named exactly: SMILES
 #
 # Output:
-#   - Tab-separated .tsv file converted from Uni-pKa mean_results.csv
-#
+#   - OUTPUT_DIR/transition_predictions.tsv
+#   - OUTPUT_DIR/state_populations.tsv
+#   - OUTPUT_DIR/final_states.tsv
 
 set -euo pipefail
 
@@ -20,21 +21,21 @@ MODEL_DIR="${REPO_DIR}/models"
 IMAGE="uni-pka:local"
 
 INPUT_TSV="${1:-}"
-OUTPUT_TSV="${2:-}"
+OUTPUT_DIR="${2:-}"
 GPU_ID="${3:-0}"
 PH="${4:-7.4}"
 
 
 usage() {
-    echo "Usage: $0 INPUT_TSV OUTPUT_TSV [GPU_ID]" >&2
+    echo "Usage: $0 INPUT_TSV OUTPUT_DIR [GPU_ID] [pH]" >&2
     echo "  INPUT_TSV:  Tab-separated .tsv file containing a SMILES column." >&2
-    echo "  OUTPUT_TSV: Destination .tsv file for Uni-pKa predictions." >&2
+    echo "  OUTPUT_DIR: Destination directory for Uni-pKa result TSV files." >&2
     echo "  GPU_ID:     Optional non-negative GPU index; defaults to 0." >&2
     echo "  pH:         Optional pH for dominant-state estimate; defaults to 7.4." >&2
     exit 2
 }
 
-[[ -n "${INPUT_TSV}" && -n "${OUTPUT_TSV}" ]] || usage
+[[ -n "${INPUT_TSV}" && -n "${OUTPUT_DIR}" ]] || usage
 
 [[ "${GPU_ID}" =~ ^[0-9]+$ ]] || {
     echo "ERROR: GPU ID must be a non-negative integer; received: ${GPU_ID}" >&2
@@ -46,11 +47,6 @@ usage() {
     exit 2
 }
 
-[[ "${OUTPUT_TSV}" == *.tsv ]] || {
-    echo "ERROR: OUTPUT_TSV must have a .tsv extension: ${OUTPUT_TSV}" >&2
-    exit 2
-}
-
 [[ -f "${INPUT_TSV}" ]] || {
     echo "ERROR: Input TSV does not exist: ${INPUT_TSV}" >&2
     exit 1
@@ -59,10 +55,8 @@ usage() {
 INPUT_DIR="$(cd "$(dirname "${INPUT_TSV}")" && pwd)"
 INPUT_FILE="$(basename "${INPUT_TSV}")"
 
-OUTPUT_DIR="$(dirname "${OUTPUT_TSV}")"
 mkdir -p "${OUTPUT_DIR}"
 OUTPUT_DIR="$(cd "${OUTPUT_DIR}" && pwd)"
-OUTPUT_TSV="${OUTPUT_DIR}/$(basename "${OUTPUT_TSV}")"
 
 echo "=== Host-side validation ==="
 
@@ -89,7 +83,7 @@ TEMP_RESULTS_DIR="$(mktemp -d "${OUTPUT_DIR}/.unipka-results.XXXXXX")"
 echo "Docker image: ${IMAGE}"
 echo "Physical host GPU selected: ${GPU_ID}"
 echo "Input TSV: ${INPUT_TSV}"
-echo "Output TSV: ${OUTPUT_TSV}"
+echo "Output directory: ${OUTPUT_DIR}"
 echo "Models: ${MODEL_DIR}"
 echo "pH: ${PH}"
 echo
@@ -154,23 +148,9 @@ try:
 
     sys.modules.setdefault("numpy._core", numpy.core)
 
-    for module_name in (
-        "multiarray",
-        "_multiarray_umath",
-        "umath",
-        "numeric",
-        "fromnumeric",
-        "shape_base",
-        "overrides",
-        "records",
-        "function_base",
-        "getlimits",
-        "arrayprint",
-        "defchararray",
-        "einsumfunc",
-        "memmap",
-        "numerictypes",
-    ):
+    for module_name in ("multiarray", "_multiarray_umath", "umath", "numeric", "fromnumeric", "shape_base",
+                        "overrides", "records", "function_base", "getlimits", "arrayprint", "defchararray",
+                        "einsumfunc", "memmap", "numerictypes"):
         try:
             module = importlib.import_module("numpy.core." + module_name)
             sys.modules.setdefault("numpy._core." + module_name, module)
@@ -215,41 +195,25 @@ except Exception as error:
     raise SystemExit(f"ERROR: Could not read input TSV: {error}")
 
 if "SMILES" not in df.columns:
-    raise SystemExit(
-        "ERROR: Input TSV must contain a column named exactly 'SMILES'. "
-        f"Found columns: {list(df.columns)}"
-    )
+    raise SystemExit(f"INPUT ERROR: Input file must contain < SMILES > column. Found: {df.columns} instead.")
 
 if df.empty:
-    raise SystemExit("ERROR: Input TSV contains no molecule rows.")
-
-df["SMILES"] = df["SMILES"].astype(str).str.strip()
-
-empty = df["SMILES"].eq("")
-if empty.any():
-    rows = (df.index[empty] + 2).tolist()
-    preview = ", ".join(map(str, rows[:10]))
-    suffix = " ..." if len(rows) > 10 else ""
-    raise SystemExit(f"ERROR: Empty SMILES values in row(s): {preview}{suffix}")
+    raise SystemExit("ERROR ERROR: Input file is empty.")
 
 unique_smiles = list(dict.fromkeys(df["SMILES"].tolist()))
 mol_ids = {smi: f"mol_{i:06d}" for i, smi in enumerate(unique_smiles)}
 
-unique_df = pd.DataFrame(
-    {
+unique_df = pd.DataFrame({
         "MolID": [mol_ids[smi] for smi in unique_smiles],
         "SMILES": unique_smiles,
         "TARGET": -1.0,
-    }
-)
+    })
 
-row_map = pd.DataFrame(
-    {
+row_map = pd.DataFrame({
         "InputRow": list(range(len(df))),
         "MolID": [mol_ids[smi] for smi in df["SMILES"]],
         "InputSMILES": df["SMILES"],
-    }
-)
+    })
 
 unique_df.to_csv(unique_output, sep="\t", index=False)
 row_map.to_csv(row_map_output, sep="\t", index=False)
@@ -266,7 +230,7 @@ python enumerator/main.py ensemble \
     --output "${RUNTIME_DATA}/ensemble.tsv" \
     --upper 2 \
     --lower -2 \
-    --maxiter 16 \
+    --maxiter 32 \
     --template /opt/uni-pka/enumerator/simple_smarts_pattern.tsv
 
 echo
@@ -297,10 +261,7 @@ if unnamed_cols:
     ensemble = ensemble.drop(columns=unnamed_cols)
 
 if len(ensemble) != len(unique_df):
-    raise SystemExit(
-        f"ERROR: Ensemble row count {len(ensemble)} does not match unique input "
-        f"row count {len(unique_df)}."
-    )
+    raise SystemExit(f"PROCESSING ERROR: Ensemble count {len(ensemble)} does not match input  {len(unique_df)}.")
 
 charge_min = -2
 charge_max = 2
@@ -327,18 +288,13 @@ for idx, row in ensemble.iterrows():
         states[charge] = state
 
         if state is not None:
-            macrostate_rows.append(
-                {
+            macrostate_rows.append({
                     "MolID": mol_id,
                     "OriginalSMILES": original_smiles,
                     "Charge": charge,
                     "MacrostateSMILES": state,
-                }
-            )
+                })
 
-    # Adjacent charge transitions only.
-    # Acid side = more protonated = charge q + 1.
-    # Base side = less protonated = charge q.
     for base_charge in range(charge_min, charge_max):
         acid_charge = base_charge + 1
 
@@ -351,30 +307,23 @@ for idx, row in ensemble.iterrows():
         transition_id = f"{mol_id}_q{acid_charge}_to_q{base_charge}"
         transition_smiles = f"{acid_states}>>{base_states}"
 
-        transition_rows.append(
-            {
+        transition_rows.append({
                 "TransitionID": transition_id,
                 "MolID": mol_id,
                 "OriginalSMILES": original_smiles,
                 "AcidCharge": acid_charge,
                 "BaseCharge": base_charge,
                 "SMILES": transition_smiles,
-            }
-        )
+            })
 
         # preprocess_pka.py keeps only SMILES and TARGET.
-        pka_rows.append(
-            {
+        pka_rows.append({
                 "SMILES": transition_smiles,
                 "TARGET": -1.0,
-            }
-        )
+            })
 
 if not pka_rows:
-    raise SystemExit(
-        "ERROR: No adjacent acid/base protonation transitions were generated. "
-        "Cannot run Uni-pKa pKa inference."
-    )
+    raise SystemExit("ERROR: No adjacent acid/base transitions generated. Cannot run Uni-pKa pKa inference.")
 
 pka_input = pd.DataFrame(pka_rows)
 transition_metadata = pd.DataFrame(transition_rows)
@@ -480,9 +429,7 @@ for fold in range(5):
     pkl_files = sorted(fold_dir.glob("*.pkl"))
 
     if len(pkl_files) != 1:
-        raise SystemExit(
-            f"ERROR: Expected one .pkl file in {fold_dir}, found {len(pkl_files)}."
-        )
+        raise SystemExit(f"ERROR: Expected one .pkl file in {fold_dir}, found {len(pkl_files)}.")
 
     with pkl_files[0].open("rb") as handle:
         batches = pickle.load(handle)
@@ -497,10 +444,7 @@ for fold in range(5):
             smiles_seen.append(batch["smi_name"][i])
 
     if len(preds) != n_transitions:
-        raise SystemExit(
-            f"ERROR: Fold {fold} produced {len(preds)} predictions, "
-            f"but {n_transitions} transition rows were expected."
-        )
+        raise SystemExit(f"ERROR: Fold {fold} produced {len(preds)} predictions, but {n_transitions} rows were expected.")
 
     fold_predictions.append(preds)
 
@@ -512,11 +456,7 @@ transition_predictions = transition_meta.copy()
 transition_predictions["pKa"] = mean_pka
 transition_predictions["pKaStdAcrossFolds"] = std_pka
 
-transition_predictions.to_csv(
-    results_dir / "transition_predictions.tsv",
-    sep="\t",
-    index=False,
-)
+transition_predictions.to_csv(results_dir / "transition_predictions.tsv", sep="\t", index=False)
 
 def compute_populations_for_molecule(mol_transitions: pd.DataFrame) -> pd.DataFrame:
     """
@@ -524,12 +464,10 @@ def compute_populations_for_molecule(mol_transitions: pd.DataFrame) -> pd.DataFr
       log10(P_base) - log10(P_acid) = pH - pKa
     """
     charges = sorted(
-        set(mol_transitions["AcidCharge"].astype(int))
-        | set(mol_transitions["BaseCharge"].astype(int))
+        set(mol_transitions["AcidCharge"].astype(int)) | set(mol_transitions["BaseCharge"].astype(int))
     )
 
-    # Use the highest charge as reference when available because transitions
-    # naturally step downward in protonation.
+    # Use the highest charge as reference when available
     reference_charge = max(charges)
     logp = {reference_charge: 0.0}
 
@@ -558,12 +496,10 @@ def compute_populations_for_molecule(mol_transitions: pd.DataFrame) -> pd.DataFr
     weights = {charge: 10 ** (value - max_logp) for charge, value in logp.items()}
     total = sum(weights.values())
 
-    return pd.DataFrame(
-        {
+    return pd.DataFrame({
             "Charge": list(weights.keys()),
             "RelativePopulation": [weights[c] / total for c in weights],
-        }
-    )
+        })
 
 population_rows = []
 summary_rows = []
@@ -581,7 +517,6 @@ for mol_id, mol_transitions in transition_predictions.groupby("MolID", sort=Fals
 
     dominant = pop.sort_values("RelativePopulation", ascending=False).iloc[0]
 
-    # Relevant pKa = transition closest to pH.
     relevant = (
         mol_transitions.assign(DistanceToPH=(mol_transitions["pKa"] - ph).abs())
         .sort_values("DistanceToPH")
@@ -608,30 +543,14 @@ for mol_id, mol_transitions in transition_predictions.groupby("MolID", sort=Fals
 state_populations = pd.concat(population_rows, ignore_index=True)
 molecule_summary = pd.DataFrame(summary_rows)
 
-state_populations.to_csv(
-    results_dir / "state_populations.tsv",
-    sep="\t",
-    index=False,
-)
+state_populations.to_csv(results_dir / "state_populations.tsv", sep="\t", index=False)
 
-molecule_summary.to_csv(
-    results_dir / "molecule_summary_unique.tsv",
-    sep="\t",
-    index=False,
-)
+molecule_summary.to_csv(results_dir / "molecule_summary_unique.tsv", sep="\t", index=False)
 
 # Expand back to the original input rows, so duplicated SMILES are preserved.
-final_by_input_row = input_row_map.merge(
-    molecule_summary,
-    on="MolID",
-    how="left",
-)
+final_by_input_row = input_row_map.merge(molecule_summary, on="MolID", how="left")
 
-final_by_input_row.to_csv(
-    results_dir / "final_states.tsv",
-    sep="\t",
-    index=False,
-)
+final_by_input_row.to_csv(results_dir / "final_states.tsv", sep="\t", index=False)
 
 print(f"Wrote transition predictions: {results_dir / 'transition_predictions.tsv'}")
 print(f"Wrote state populations:      {results_dir / 'state_populations.tsv'}")
@@ -654,21 +573,28 @@ chown -R "${HOST_UID}:${HOST_GID}" "${RESULTS_DIR}"
 
 CONTAINER_SCRIPT
 
-FINAL_RESULT_TSV="${TEMP_RESULTS_DIR}/final_states.tsv"
+RESULT_FILES=(
+    "transition_predictions.tsv"
+    "state_populations.tsv"
+    "final_states.tsv"
+)
 
-[[ -f "${FINAL_RESULT_TSV}" ]] || {
-    echo "ERROR: Final result is missing: ${FINAL_RESULT_TSV}" >&2
-    exit 1
-}
+for result_file in "${RESULT_FILES[@]}"; do
+    source_file="${TEMP_RESULTS_DIR}/${result_file}"
+    [[ -f "${source_file}" ]] || {
+        echo "ERROR: Expected result is missing: ${source_file}" >&2
+        exit 1
+    }
+done
 
 echo
-echo "=== Copying final pH-state output TSV ==="
+echo "=== Copying Uni-pKa result TSV files ==="
 
-cp "${FINAL_RESULT_TSV}" "${OUTPUT_TSV}"
+for result_file in "${RESULT_FILES[@]}"; do
+    cp "${TEMP_RESULTS_DIR}/${result_file}" "${OUTPUT_DIR}/${result_file}"
+done
 
-echo "Wrote TSV output:"
-echo "${OUTPUT_TSV}"
-
-echo
-echo "=== Removing temporary Uni-pKa results ==="
-rm -rf "${TEMP_RESULTS_DIR}"
+echo "Wrote TSV outputs:"
+for result_file in "${RESULT_FILES[@]}"; do
+    echo "${OUTPUT_DIR}/${result_file}"
+done

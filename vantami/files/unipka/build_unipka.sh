@@ -20,7 +20,8 @@ RUN python --version \
     && python -c "import rdkit; print('rdkit:', rdkit.__version__)" \
     && python -c "import unicore; print('unicore import: OK')"
 
-ENTRYPOINT ["/bin/bash"]
+ENTRYPOINT []
+CMD ["python", "--version"]
 
 EOF
 
