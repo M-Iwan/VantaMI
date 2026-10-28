@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -29,6 +30,10 @@ class Molecule:
         Valid, canonical SMILES encoding all intended information.
     id: str
         Molecule identifier used in files and output tables.
+
+    Notes
+    -----
+    Updated in vantami v.0.5.2
     """
 
     def __init__(self, smiles: str, id: str):
@@ -631,3 +636,104 @@ class Molecule:
         result["SMILES"] = self.smiles
         self.interaction_df = result.rename(columns={"protein": "residue"})
         return self.interaction_df
+
+    def save(self, path: str | Path):
+        """
+        Save this Molecule instance as paired SDF and Parquet files.
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            File prefix. A supplied suffix is ignored.
+        """
+        base = Path(path).expanduser()
+        if base.suffix:
+            base = base.with_suffix("")
+
+        base.parent.mkdir(parents=True, exist_ok=True)
+
+        sdf_file = base.with_suffix(".sdf")
+        parquet_file = base.with_suffix(".parquet")
+
+        rdkit_properties = {
+            name: self.mol.GetProp(name)
+            for name in self.mol.GetPropNames(includePrivate=False, includeComputed=False)
+        }
+
+        metadata = pl.DataFrame({
+                "id": [self.id],
+                "smiles": [self.smiles],
+                "energy": [self.energy],
+                "energy_method": [self.energy_method],
+                "charges": [self.charges.tolist() if self.charges is not None else None],
+                "charge_method": [self.charge_method],
+                "charge": [self.charge],
+                "uhf": [self.uhf],
+                "n_optimized": [self.n_optimized],
+                "rdkit_properties": [json.dumps(rdkit_properties, separators=(",", ":"))],
+            })
+
+        writer = Chem.SDWriter(str(sdf_temp))
+        writer.write(self.mol)
+        writer.close()
+
+        metadata.write_parquet(parquet_temp, compression="zstd")
+
+    @classmethod
+    def load(cls, path: str | Path) -> "Molecule":
+        """
+        Load a Molecule instance saved with ``Molecule.save()``.
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            File prefix originally passed to ``save()``.
+
+        Returns
+        -------
+        Molecule
+        """
+        base = Path(path).expanduser()
+        if base.suffix:
+            base = base.with_suffix("")
+
+        sdf_file = base.with_suffix(".sdf")
+        parquet_file = base.with_suffix(".parquet")
+
+        if not sdf_file.is_file():
+            raise FileNotFoundError(f"SDF file not found: {sdf_file}")
+        if not parquet_file.is_file():
+            raise FileNotFoundError(f"Parquet file not found: {parquet_file}")
+
+        metadata = pl.read_parquet(parquet_file)
+        if metadata.height != 1:
+            raise ValueError(f"Expected one record in file, found {metadata.height}")
+
+        data = metadata.row(0, named=True)
+
+        supplier = Chem.SDMolSupplier(str(sdf_file), removeHs=False, sanitize=False)
+        mol = next((molecule for molecule in supplier if molecule is not None), None)
+        if mol is None:
+            raise ValueError(f"Could not load a valid molecule from {sdf_file}.")
+
+        molecule = cls(smiles=data["smiles"], id=data["id"])
+        molecule.mol = mol
+        molecule.energy = data["energy"]
+        molecule.energy_method = data["energy_method"]
+        molecule.charge_method = data["charge_method"]
+        molecule.charge = data["charge"]
+        molecule.uhf = data["uhf"]
+        molecule.n_optimized = int(data["n_optimized"] or 0)
+
+        if data["charges"] is not None:
+            molecule.charges = np.asarray(data["charges"], dtype=float)
+            molecule._store_charges(
+                molecule.mol,
+                molecule.charges,
+                molecule.charge_method or "STORED",
+            )
+
+        for name, value in json.loads(data["rdkit_properties"] or "{}").items():
+            molecule.mol.SetProp(name, str(value))
+
+        return molecule
