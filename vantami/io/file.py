@@ -7,6 +7,16 @@ import polars as pl
 
 
 def read_pd(path: str, kwargs: Optional[Dict] = None) -> pd.DataFrame:
+    """
+    Automatically detect extension and read a pandas DataFrame.
+
+    Parameters
+    ----------
+    path: str
+        Path to the file
+    kwargs: dict
+        Additional keywords passed to a corresponding read function
+    """
     if kwargs is None:
         kwargs = {}
     ext = path.split('.')[-1]
@@ -30,6 +40,16 @@ def read_pd(path: str, kwargs: Optional[Dict] = None) -> pd.DataFrame:
 
 
 def write_pd(df, path):
+    """
+    Automatically detect extension and write a pandas DataFrame.
+
+    Parameters
+    ----------
+    df: pd.DataFrame
+        DataFrame to write
+    path: str
+        Path to the file
+    """
     ext = path.split('.')[-1]
     if len(df) >= 1:
         if ext == 'xlsx':
@@ -48,7 +68,14 @@ def write_pd(df, path):
 
 def read_pl(path: str, kwargs: Optional[Dict] = None) -> pl.DataFrame:
     """
-    Read DataFrame-like structure using the Polars library
+    Automatically detect extension and read a polars DataFrame.
+
+    Parameters
+    ----------
+    path: str
+        Path to the file
+    kwargs: dict
+        Additional keywords passed to a corresponding read function
     """
     if kwargs is None:
         kwargs = {}
@@ -76,6 +103,18 @@ def read_pl(path: str, kwargs: Optional[Dict] = None) -> pl.DataFrame:
 
 
 def write_pl(df: pl.DataFrame, path: str, kwargs: Optional[Dict] = None) -> None:
+    """
+    Automatically detect extension and write a pandas DataFrame.
+
+    Parameters
+    ----------
+    df: pl.DataFrame
+        DataFrame to write
+    path: str
+        Path to the file
+    kwargs: dict
+        Additional keywords passed to a corresponding save function
+    """
     if kwargs is None:
         kwargs = {}
     ext = path.split('.')[-1]
@@ -87,7 +126,14 @@ def write_pl(df: pl.DataFrame, path: str, kwargs: Optional[Dict] = None) -> None
         elif ext == 'tsv':
             df.write_csv(path, separator='\t', **kwargs)
         elif ext == 'parquet':
-            df.write_parquet(path, **kwargs)
+            parquet_kwargs = {
+                "compression": "zstd",
+                "compression_level": 6
+            }
+            if kwargs:
+                parquet_kwargs.update(kwargs)
+
+            df.write_parquet(path, **parquet_kwargs)
         elif ext == 'pkl':
             pickle.dump(df, open(path, 'wb'))
         elif ext == 'joblib':
