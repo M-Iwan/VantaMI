@@ -1442,7 +1442,7 @@ def smiles_2_mordred(smiles: Union[str, List[str], npt.NDArray[str]], ignore_3D:
         return _to_mordred(smiles=smiles, calc=calc)
 
     elif isinstance(smiles, (list, np.ndarray)):
-        return [_to_mapc(smiles=smi, calc=calc) for smi in smiles]
+        return [_to_mordred(smiles=smi, calc=calc) for smi in smiles]
 
     else:
         raise TypeError(f"Expected smiles to be str or Union[List[str], npt.NDArray[str]], got {type(smiles)} instead")
@@ -1498,7 +1498,7 @@ def dataframe_2_mordred(df: pl.DataFrame, smiles_col: str = 'SMILES', output_col
         },
         schema={
             smiles_col: pl.String,
-            output_col: pl.Array(pl.UInt64, shape=nbits)
+            output_col: pl.Array(pl.Float64, shape=1613 if ignore_3D else 1826)
         }
     )
 
