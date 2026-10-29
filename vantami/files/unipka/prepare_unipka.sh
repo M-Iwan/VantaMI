@@ -31,12 +31,27 @@ EOF
 host_error() {
     local status=$?
     local line=$1
+
     printf 'ERROR: host script failed at line %s (exit status %s).\n' \
         "${line}" "${status}" >&2
+
     exit "${status}"
 }
 
+host_signal() {
+    local signal_name="$1"
+    local signal_status="$2"
+
+    printf 'ERROR: host script received %s (exit status %s).\n' \
+        "${signal_name}" "${signal_status}" >&2
+    printf 'ERROR: preparation was interrupted externally; preserving staging diagnostics.\n' >&2
+
+    exit "${signal_status}"
+}
+
 trap 'host_error $LINENO' ERR
+trap 'host_signal SIGINT 130' INT
+trap 'host_signal SIGTERM 143' TERM
 
 [[ -n "${INPUT_TSV}" && -n "${PREPARED_DIR}" ]] || usage
 [[ "${INPUT_TSV}" == *.tsv ]] || {
@@ -136,7 +151,8 @@ echo "Staging:    ${STAGING_DIR}"
 echo "CPU jobs:   ${N_JOBS}"
 echo "Batch size: ${BATCH_SIZE}"
 
-docker run --rm -i \
+docker run -i \
+    --name "microstate_enumeration" \
     -v "${INPUT_DIR}:/work/input:ro" \
     -v "${STAGING_DIR}:/work/prepared" \
     --cpus="${N_JOBS}" \
