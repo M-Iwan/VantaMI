@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Literal, Mapping, Optional, Sequence, TypeAlias
+
 import joblib
 from joblib import Parallel, delayed
-
 import polars as pl
 from rdkit import Chem
 from tqdm.auto import tqdm
@@ -15,12 +15,27 @@ from vantami.io import write_pl
 
 MolID: TypeAlias = str | int
 MoleculeInput: TypeAlias = tuple[MolID, str]
-ConformerStatus: TypeAlias = Literal["success", "failed", "skipped"]
+
 
 
 def _run_conformer_search(mol_id: MolID, smiles: str, molecule: DeepMolecule, options: Mapping[str, Any]):
     """
-    Execute one isolated conformer search, including in joblib workers.
+    Run a conformer search and capture any exception as a result record.
+
+    Parameters
+    ----------
+    mol_id: MolID
+        Identifier associated with the molecule.
+    smiles: str
+        SMILES representation of the molecule.
+    molecule: DeepMolecule
+        Molecule instance for which to generate and optimize conformers.
+    options: Mapping[str, Any]
+        Keyword arguments passed to `DeepMolecule.lowest_energy_conformer`.
+
+    Returns
+    -------
+    tuple[MolID, str, DeepMolecule, dict[str, Any]]
     """
     try:
         conformer_id, energy = molecule.lowest_energy_conformer(**options)
@@ -50,7 +65,6 @@ class DeepMoleculeManager:
     conformer_defaults
         Defaults passed to < DeepMolecule.lowest_energy_conformer >.
     """
-
     DEFAULT_CONFORMER_OPTIONS: dict[str, Any] = {
         "n_conformers": 16,
         "method": "MMFF94s",
@@ -62,6 +76,15 @@ class DeepMoleculeManager:
     }
 
     def __init__(self, conformer_defaults: Optional[Mapping[str, Any]] = None) -> None:
+        """
+        Initialize an empty collection of SMILES-unique `DeepMolecule` instances.
+
+        Parameters
+        ----------
+        conformer_defaults: Optional[Mapping[str, Any]]
+            Default options passed to conformer-search calculations. Values override
+            the built-in conformer-search defaults.
+        """
         self.molecules: dict[str, DeepMolecule] = {}
         self.mol_ids: dict[str, MolID] = {}
         self.failed_smiles: dict[str, str] = {}
@@ -101,11 +124,19 @@ class DeepMoleculeManager:
             raise ValueError("max_iterations must be at least 1.")
 
     def _record_error(self, smiles: str, stage: str, message: str) -> None:
+        """
+        Store an error message for a molecule-processing stage.
+        """
         self.errors.setdefault(smiles, {})[stage] = message
 
     def clear_errors(self, smiles: Optional[str] = None) -> None:
         """
-        Clear all errors, or all recorded errors for one SMILES.
+        Clear all recorded errors or errors associated with one SMILES string.
+
+        Parameters
+        ----------
+        smiles: Optional[str]
+            SMILES representation whose errors will be removed. If `None`, all errors are removed.
         """
         if smiles is None:
             self.errors.clear()
@@ -114,7 +145,18 @@ class DeepMoleculeManager:
 
     def add(self, mol_id: MolID, smiles: str) -> bool:
         """
-        Validate and add one molecule, returning whether it was added.
+        Validate and register one molecule from its identifier and SMILES string.
+
+        Parameters
+        ----------
+        mol_id: MolID
+            Identifier associated with the molecule.
+        smiles: str
+            SMILES representation to validate and register.
+
+        Returns
+        -------
+        bool
         """
         if smiles in self.molecules:
             raise ValueError(f"SMILES is already registered: {smiles!r}")
@@ -146,9 +188,14 @@ class DeepMoleculeManager:
         self.conformer_results.pop(smiles, None)
         return True
 
-    def add_many(self, records: Iterable[MoleculeInput]) -> dict[str, int]:
+    def add_many(self, records: Iterable[MoleculeInput]):
         """
-        Add < (mol_id, smiles) > records and return valid/invalid counts.
+        Validate and register multiple molecule records.
+
+        Parameters
+        ----------
+        records: Iterable[MoleculeInput]
+            Iterable of `(mol_id, smiles)` records to add.
         """
         counts = {"added": 0, "invalid": 0}
         for mol_id, smiles in records:
@@ -161,7 +208,16 @@ class DeepMoleculeManager:
 
     def get(self, smiles: str) -> DeepMolecule:
         """
-        Retrieve a valid molecule by its original, input SMILES.
+        Retrieve a valid registered molecule by its SMILES string.
+
+        Parameters
+        ----------
+        smiles: str
+            Original SMILES representation of the registered molecule.
+
+        Returns
+        -------
+        DeepMolecule
         """
         try:
             return self.molecules[smiles]
@@ -170,33 +226,76 @@ class DeepMoleculeManager:
 
     def get_valid_conformers(self):
         """
-        Retrieve all DeepMolecules with exit status == "success"
+        Return molecules whose conformer searches completed successfully.
+
+        Returns
+        -------
+        list[DeepMolecule]
         """
         if not self.conformer_results:
             raise ValueError(f"No conformer search has been performed yet")
 
         return [self.get(smi) for smi, res in self.conformer_results.items() is res["status"] == "success"]
 
-    def is_valid(self, smiles: str) -> bool:
-        """
-        Return whether a SMILES has a successfully constructed molecule.
-        """
-        return smiles in self.molecules
-
     def select(self, valid: bool = True) -> dict[str, DeepMolecule] | dict[str, MolID]:
         """
-        Return valid molecules or invalid SMILES mapped to their MolIDs.
+        Return valid molecules or invalid SMILES records.
+
+        Parameters
+        ----------
+        valid: bool
+            Whether to return valid molecules. If `False`, return invalid SMILES strings mapped to their molecule identifiers.
+
+        Returns
+        -------
+        dict[str, DeepMolecule] | dict[str, MolID]
         """
+
         return self.molecules.copy() if valid else self.failed_smiles.copy()
 
+    def select_conformers(self, valid: bool = True) -> dict[str, DeepMolecules]:
+        """
+        Return valid conformers or invalid SMILES records.
+
+        Parameters
+        ----------
+        valid: bool
+            Whether to return valid molecules. If `False`, return invalid SMILES strings mapped to their molecule identifiers.
+
+        Returns
+        -------
+        dict[str, DeepMolecule] | dict[str, MolID]
+        """
+        if not self.conformer_results:
+            raise ValueError(f"No conformer search has been performed yet")
+
+        if valid:
+            return [self.get(smi) for smi, res in self.conformer_results.items() is res["status"] == "success"]
+        else:
+            return [self.get(smi) for smi, res in self.conformer_results.items() is res["status"] != "success"]
+
     def _search_options(self, overrides: Mapping[str, Any]) -> dict[str, Any]:
+        """
+        Merge conformer-search defaults with per-call option overrides.
+        """
         options = self.conformer_defaults | dict(overrides)
         self._validate_conformer_options(options)
         return options
 
     def search_conformers(self, smiles: str, **overrides: Any) -> dict[str, Any]:
         """
-        Run a conformer search for one valid molecule without raising errors.
+        Run a conformer search for one valid molecule and record its result.
+
+        Parameters
+        ----------
+        smiles: str
+            SMILES representation of the valid registered molecule.
+        **overrides: Any
+            Conformer-search options that override the configured defaults.
+
+        Returns
+        -------
+        dict[str, Any]
         """
         molecule = self.get(smiles)
         options = self._search_options(overrides)
@@ -213,10 +312,22 @@ class DeepMoleculeManager:
         return result.copy()
 
     def search_conformers_many(self, smiles: Optional[Sequence[str]] = None, *, n_jobs: int = 1,
-                               batch_size: int | str = "auto", **overrides: Any) -> None:
+                               batch_size: Union[int, str] = "auto", **overrides: Any) -> None:
         """
-        Run independent conformer searches and update < .conformer_results >.
+        Run conformer searches for multiple valid molecules.
+
+        Parameters
+        ----------
+        smiles: Optional[Sequence[str]]
+            SMILES strings for molecules to process. If `None`, all valid registered molecules are processed.
+        n_jobs: int
+            Number of parallel joblib workers. Use `1` for sequential processing.
+        batch_size: int | str
+            Number of tasks dispatched to each joblib worker batch, or `"auto"` to let joblib determine an appropriate batch size.
+        **overrides: Any
+            Conformer-search options that override the configured defaults.
         """
+
         options = self._search_options(overrides)
         requested_smiles = list(self.molecules if smiles is None else smiles)
 
@@ -245,7 +356,11 @@ class DeepMoleculeManager:
 
     def summary(self) -> dict[str, int]:
         """
-        Return basic collection and conformer-search status counts.
+        Return counts for molecule validation and conformer-search results.
+
+        Returns
+        -------
+        dict[str, int]
         """
         statuses = [result["status"] for result in self.conformer_results.values()]
         return {
@@ -256,9 +371,18 @@ class DeepMoleculeManager:
             "conformer_failures": statuses.count("failed"),
         }
 
-    def save(self, path: str | Path) -> Path:
+    def save(self, path: Union[str, Path]) -> Path:
         """
-        Save the full manager state, including valid and invalid inputs.
+        Serialize the complete manager state to disk.
+
+        Parameters
+        ----------
+        path: Union[str, Path]
+            Destination path for the serialized manager.
+
+        Returns
+        -------
+        Path
         """
         output_path = Path(path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -266,9 +390,18 @@ class DeepMoleculeManager:
         return output_path
 
     @classmethod
-    def load(cls, path: str | Path) -> "DeepMoleculeManager":
+    def load(cls, path: Union[str, Path]) -> "DeepMoleculeManager":
         """
-        Restore a manager saved with :meth:`save`.
+        Restore a serialized manager instance from disk.
+
+        Parameters
+        ----------
+        path: Union[str, Path]
+            Path to the serialized manager.
+
+        Returns
+        -------
+        DeepMoleculeManager
         """
         manager = joblib.load(Path(path))
         if not isinstance(manager, cls):
@@ -277,7 +410,11 @@ class DeepMoleculeManager:
 
     def to_dataframe(self) -> pl.DataFrame:
         """
-        Return one row per supplied SMILES as a Polars DataFrame.
+        Convert validation and conformer-search results to a Polars DataFrame.
+
+        Returns
+        -------
+        pl.DataFrame
         """
         rows: list[dict[str, Any]] = []
         for smiles in self.molecules:
@@ -308,9 +445,18 @@ class DeepMoleculeManager:
 
         return pl.DataFrame(rows)
 
-    def export_results(self, path: str | Path) -> Path:
+    def export_results(self, path: Union[str, Path]) -> Path:
         """
-        Export :meth:`to_dataframe`.
+        Export validation and conformer-search results to a file.
+
+        Parameters
+        ----------
+        path: Union[str, Path]
+            Destination path for the exported results.
+
+        Returns
+        -------
+        Path
         """
         output_path = Path(path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
