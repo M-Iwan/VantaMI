@@ -184,8 +184,7 @@ def random_train_test_split(df: pl.DataFrame, fraction: float, id_col: str = 'Mo
     return train_df, test_df
 
 
-def stratified_train_test_split(df: pl.DataFrame, fraction: float, strat_col: Union[List[str], str],
-                                id_col: str = 'MolID'):
+def stratified_train_test_split(df: pl.DataFrame, fraction: float, strat_col: Union[List[str], str]):
     """
     Split the DataFrame into training and testing data while preserving the distributions denoted by strat_col.
     If the strat_col corresponds to a column of floats, they will first be binned based on the [0.2, 0.4, 0.6, 0.8]
@@ -200,8 +199,6 @@ def stratified_train_test_split(df: pl.DataFrame, fraction: float, strat_col: Un
         Fraction of data to use for the TEST set.
     strat_col: List[str]
         List of columns to use for stratification.
-    id_col: str
-        Name of the column with unique identifier for each row. If missing, a "MolID" will be added.
 
     Returns
     -------
@@ -219,9 +216,6 @@ def stratified_train_test_split(df: pl.DataFrame, fraction: float, strat_col: Un
 
     if isinstance(strat_col, str):
         strat_col = [strat_col]
-
-    if id_col not in df.columns:
-        df = df.with_row_index(name='MolID')
 
     for col in strat_col:
         if col not in df.columns:
@@ -560,8 +554,8 @@ def butina_kfold_split(df: pl.DataFrame, strat_col: Union[str, List[str]] = None
 
 
 def cc_kfold_split(df: pl.DataFrame, strat_col: Union[str, List[str]] = None, smiles_col: str = 'SMILES',
-                   features_col: str = 'Morgan', threshold: float = 0.3, metric: str = 'jaccard', n_folds: int = 5,
-                   n_jobs: int = 11, tolerance: float = 0.3):
+                   features_col: str = 'ECFP', threshold: float = 0.3, metric: str = 'jaccard', n_folds: int = 5,
+                   n_jobs: int = 8, tolerance: float = 0.3):
 
     """
     Splits a DataFrame into folds based on connected components clustering.

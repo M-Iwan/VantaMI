@@ -1,7 +1,9 @@
+from typing import Dict, Any, List, Optional, Union
+
+import polars as pl
+
 import torch
 from torch.utils.data import Dataset
-import polars as pl
-from typing import Dict, Any, List, Optional, Union
 
 
 class MMDataset(Dataset):

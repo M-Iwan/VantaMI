@@ -10,6 +10,7 @@ import optuna
 
 from vantami.ml.models import Unit, Ensemble, ClassifierUnit, RegressorUnit, ClassifierEnsemble, RegressorEnsemble
 from vantami.ml.utils import *
+from vantami.ml.params import *
 from vantami.data.manager import KFoldManager
 
 
@@ -71,7 +72,7 @@ def optuna_search(model_name: str, dataset_manager: KFoldManager, optimization_m
     def objective(trial: optuna.trial.Trial):
         nonlocal best_ensemble, best_params, best_metric
 
-        model_params_fn = get_params_function(model_name)
+        model_params_fn = get_optuna_params_function(model_name)
         model_params = model_params_fn(trial)
 
         try:

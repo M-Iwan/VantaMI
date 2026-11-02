@@ -911,6 +911,142 @@ def k_neighbors_distance(query_array: EmbeddingSequence, ref_array: Optional[Emb
     })
 
 
+def group_distance(df: pl.DataFrame, features_col: str, group_col: str, metric: str = "jaccard", n_jobs: int = 1,
+                   batch_size: int = 1024, subsample: int = 2048):
+    """
+    Calculate full intra- and intergroup distance distributions. The group_col should contain either
+    integers or lists of integers.
+
+    Parameters
+    ----------
+    df: pl.DataFrame
+        A polars DataFrame
+    features_col: str
+        The name of the column with features to use for distance calculation
+    group_col: str
+        The name of the column with group assignments for comparison.
+    metric : str, optional
+        Distance metric to use. Default is 'jaccard'. See scipy.spatial.distance.cdist
+        for a list of supported metrics.
+    n_jobs : int, optional
+        Number of jobs for parallel processing. Default is 1.
+    batch_size : int, optional
+        Number of rows to process in a single batch. Default is 1024.
+    subsample: int
+        Maximum number of distances to sample from resulting distance matrices.
+        Set it to None to return all distances.
+
+
+    Returns
+    -------
+    pl.DataFrame
+
+    Notes
+    -----
+    Added in vantami v.0.5.2
+    """
+    required_columns = [features_col, group_col]
+
+    if (missing_columns := [column for column in required_columns if column not in df.columns]):
+        raise KeyError(f"Missing required columns: {missing_columns}.")
+
+    if subsample is not None:
+        if not isinstance(subsample, int):
+            raise TypeError(f"Expected subsample to be an integer, got {type(subsample)}")
+        if subsample < 1:
+            raise ValueError(f"Expected subsample to be a positive integer, got {subsample}")
+
+    group_type = df[group_col].dtype
+    single_assignment_dtypes = {pl.Int32, pl.Int64, pl.String}
+    multiple_assignment_dtypes = {pl.List, pl.Array}
+
+    # Assume each entry belongs to a single group
+    if group_type in single_assignment_dtypes:
+        unique_groups = df[group_col].drop_nulls().unique().to_list()
+        group_type = 'Single'
+
+    # Assume each entry *might* belong to multiple groups
+    elif group_type in multiple_assignment_dtypes:
+        unique_groups = sorted(chain.from_iterable(df[group_col].drop_nulls().unique().to_list()))
+        group_type = 'Multiple'
+
+    else:
+        raise TypeError(f"Expected the dtype of group_col to be either Int32, Int64, or String for single group"
+                        f"assignment, and pl.List or pl>array for multi-group assignments. "
+                        f"Got {df[group_col].dtype} instead.")
+
+    if not unique_groups:
+        return None
+
+    results = []
+    rng = np.random.default_rng(seed=42)
+
+    for group in unique_groups:
+        if group_type == "Single":
+            group_mask = pl.col(group_col) == group
+        else:
+            group_mask = pl.col(group_col).list.contains(group)
+
+        query_array = [a.reshape(-1) for a in df.filter(group_mask)[features_col].to_numpy()]
+        ref_array = [a.reshape(-1) for a in df.filter(~group_mask)[features_col].to_numpy()]
+
+        if len(query_array) < 2:
+            raise ValueError(
+                f"Group {group} contains only {len(query_array)} member(s). "
+                f"At least two members are required for intra-group statistics."
+            )
+
+        if len(ref_array) == 0:
+            raise ValueError(
+                f"Group {group} has no entries outside the group. "
+                "Inter-group statistics cannot be calculated."
+            )
+
+        intra_dist = distance_matrix(
+            array_1=query_array,
+            array_2=None,  # automated self-comparison
+            metric=metric,
+            n_jobs=n_jobs,
+            batch_size=batch_size,
+            return_triu=True
+        )
+
+        inter_dist = distance_matrix(
+            array_1=query_array,
+            array_2=ref_array,
+            metric=metric,
+            n_jobs=n_jobs,
+            batch_size=batch_size,
+            return_triu=True,
+        )
+
+        intra_dist = intra_dist[np.triu_indices_from(intra_dist, k=1)].flatten()
+        inter_dist = inter_dist.flatten()
+
+        if subsample is not None:
+            n_intra = min(subsample, len(intra_dist))
+            n_inter = min(subsample, len(inter_dist))
+
+            intra_dist = rng.choice(intra_dist, size=n_intra, replace=False)
+            inter_dist = rng.choice(inter_dist, size=n_inter, replace=False)
+
+        distance_values = np.concatenate((intra_dist, inter_dist))
+        distance_type = np.concatenate((
+            np.full(intra_dist.size, "intra"),
+            np.full(inter_dist.size, "inter"),
+        ))
+
+        results.append(
+            pl.DataFrame({
+                group_col: [group] * distance_values.size,
+                "distance_type": distance_type,
+                "distance": distance_values,
+            })
+        )
+
+    return pl.concat(results, how="vertical_relaxed")
+
+
 def group_k_neighbors_distance(df: pl.DataFrame, features_col: str, group_col: str, metric: str = "jaccard",
                                n_jobs: int = 1, batch_size: int = 1024, nearest_k: Optional[List[int]] = None,
                                furthest_k: Optional[List[int]] = None):
@@ -952,6 +1088,7 @@ def group_k_neighbors_distance(df: pl.DataFrame, features_col: str, group_col: s
 
     group_type = df[group_col].dtype
     single_assignment_dtypes = {pl.Int32, pl.Int64, pl.String}
+    multiple_assignment_dtypes = {pl.List, pl.Array}
 
     # Assume each entry belongs to a single group
     if group_type in single_assignment_dtypes:
@@ -959,13 +1096,14 @@ def group_k_neighbors_distance(df: pl.DataFrame, features_col: str, group_col: s
         group_type = 'Single'
 
     # Assume each entry *might* belong to multiple groups
-    elif group_type == pl.List:
+    elif group_type in multiple_assignment_dtypes:
         unique_groups = sorted(chain.from_iterable(df[group_col].drop_nulls().unique().to_list()))
         group_type = 'Multiple'
 
     else:
         raise TypeError(f"Expected the dtype of group_col to be either Int32, Int64, or String for single group"
-                        f"assignment, and pl.List for multi-group assignments. Got {df[group_col].dtype} instead.")
+                        f"assignment, and pl.List or pl>array for multi-group assignments. "
+                        f"Got {df[group_col].dtype} instead.")
 
     if not unique_groups:
         return None

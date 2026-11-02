@@ -1,3 +1,21 @@
+# [0.5.2]: 02-11-2026
+[Added]
+- Support for Mordred descriptors using community maintained Mordred packgae
+- Parameters for RandomSearch
+- Setup files for Uni-pKa allowing for calculating (the most likely) protonation states at a given pH
+- vantami.data.distance group_distance for calculating distributions of pairwise distances between groups
+- DeepMolecule class (vantami.chem.molecule) with convenient API for conformer search and Deep Learning
+- Support for compression via vantami.io.files functions
+- Manager for conformational searches using DeepMolecules
+
+[Changed]
+- Split Graph and String Vectorizers to separate files 
+
+[Renamed]
+- vantami.cache to vantami.paths
+- vantami.deep to vantami.dl
+- vantami.chemistry to vantami.chem
+
 # [0.5.1]: 16-10-2026
 [Added]
 - XTB calculations support for Molecule in vantami.chemistry.molecule
