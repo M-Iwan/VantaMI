@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import re
-from collections import Counter
 from typing import Iterable, List, Optional, Tuple, Union
 
 import numpy as np
@@ -20,11 +18,25 @@ class GraphVectorizer:
     """
     Turn SMILES or prepared DeepMolecule objects into torch_geometric Data.
 
-    Node features contain atom descriptors and a partial-charge feature. Edge features contain bond descriptors,
-    3D bond distance, and a binary flag indicating whether 3D geometry was available.
+    Node features contain atom descriptors, periodic table group, and a partial-charge feature.
+    Edge features contain bond descriptors and 3D bond distance.
+
+    Updated in Vantami 0.5.2
     """
 
     def __init__(self, atom_encoding: dict = None, bond_encoding: dict = None, suppress: bool = True):
+        """
+        Initialize the graph vectorizer with atom and bond encoding schemes.
+
+        Parameters
+        ----------
+        atom_encoding: Optional[dict]
+            Mapping of atom symbols to integer encoding indices. If `None`, the default atom encoding is used.
+        bond_encoding: Optional[dict]
+            Mapping of bond-type names to integer encoding indices. If `None`, the default bond encoding is used.
+        suppress: bool
+            Whether to suppress RDKit log messages.
+        """
 
         if atom_encoding is None:
             self.atom_encoding = {
@@ -70,8 +82,20 @@ class GraphVectorizer:
 
     def encode_atom(self, atom: Chem.rdchem.Atom, partial_charge: float = 0.0) -> npt.NDArray:
         """
-        Encode one atom and append its partial-charge feature.
+        Encode an RDKit atom as a numerical feature vector.
+
+        Parameters
+        ----------
+        atom: Chem.rdchem.Atom
+            RDKit atom to encode.
+        partial_charge: float
+            Partial atomic charge to include in the atom features.
+
+        Returns
+        -------
+        npt.NDArray
         """
+
         type_enc = np.zeros(shape=(self.atom_encoding_size), dtype=np.float32)
         type_enc[self.atom_encoding.get(atom.GetSymbol(), -1)] = 1.0
 
@@ -93,11 +117,28 @@ class GraphVectorizer:
 
         return np.hstack((type_enc, group_enc, prop_enc))
 
-    def encode_mol_atoms(self, mol: Chem.rdchem.Mol, charges: Optional[np.ndarray] = None,
+    def encode_mol_atoms(self, mol: Chem.rdchem.Mol, charges: Optional[npt.NDArray] = None,
                          heavy_only: bool = True) -> npt.NDArray:
         """
-        Encode molecular atoms.
+        Encode the atoms of an RDKit molecule as a feature matrix.
+
+        Parameters
+        ----------
+        mol: Chem.rdchem.Mol
+            RDKit molecule containing the atoms to encode.
+
+        charges: Optional[npt.NDArray]
+            Partial charges corresponding to the selected atoms. If `None`, zero-valued
+            charges are used.
+
+        heavy_only: bool
+            Whether to include only heavy atoms, excluding hydrogen atoms.
+
+        Returns
+        -------
+        npt.NDArray
         """
+
         atoms = [atom for atom in mol.GetAtoms() if not heavy_only or atom.GetAtomicNum() > 1]
 
         if charges is None:
@@ -108,10 +149,24 @@ class GraphVectorizer:
         return np.vstack(atom_list).astype(np.float32)
 
     def encode_bond(self, bond: Chem.rdchem.Bond, atom_indices: Optional[dict[int, int]] = None,
-                    distance: float = 0.0) -> Tuple[list[list[int]], np.ndarray]:
+                    distance: float = 0.0) -> Tuple[list[list[int]], npt.NDArray]:
         """
-        Encode one bond and its interatomic distance.
+        Encode an RDKit bond as bidirectional edges and a bond feature vector.
+
+        Parameters
+        ----------
+        bond: Chem.rdchem.Bond
+            RDKit bond to encode.
+        atom_indices: Optional[dict[int, int]]
+            Mapping from RDKit atom indices to graph-node indices. If `None`, the original atom indices are used.
+        distance: float
+            Interatomic distance to include in the bond features.
+
+        Returns
+        -------
+        Tuple[list[list[int]], npt.NDArray]
         """
+
         start_idx = bond.GetBeginAtomIdx()
         end_idx = bond.GetEndAtomIdx()
 
@@ -140,8 +195,23 @@ class GraphVectorizer:
     def encode_mol_bonds(self, mol: Chem.rdchem.Mol, positions: Optional[npt.NDArray] = None,
                          heavy_only: bool = False) -> Tuple[npt.NDArray, npt.NDArray]:
         """
-        Encode bonds.
+        Encode the bonds of an RDKit molecule as graph edges and edge features.
+
+        Parameters
+        ----------
+        mol: Chem.rdchem.Mol
+            RDKit molecule containing the bonds to encode.
+        positions: Optional[npt.NDArray]
+            Cartesian coordinates of the selected atoms, used to calculate bond distances.
+            If `None`, bond distances are set to zero.
+        heavy_only: bool
+            Whether to include only bonds whose endpoint atoms are both heavy atoms.
+
+        Returns
+        -------
+        Tuple[npt.NDArray, npt.NDArray]
         """
+
         atoms = [atom for atom in mol.GetAtoms() if not heavy_only or atom.GetAtomicNum() > 1]
         atom_indices = {atom.GetIdx(): graph_index for graph_index, atom in enumerate(atoms)}
 
@@ -153,8 +223,7 @@ class GraphVectorizer:
         if not bonds:
             return (
                 np.array([0, 0], dtype=np.int64).reshape(2, 1),
-                np.zeros(shape=(1, self.bond_encoding_size + 4), dtype=np.float32,
-                ),
+                np.zeros(shape=(1, self.bond_encoding_size + 4), dtype=np.float32),
             )
 
         edges, encoding = [], []
@@ -176,10 +245,20 @@ class GraphVectorizer:
 
     def from_smiles(self, smiles: str, heavy_only: bool = True) -> Graph:
         """
-        Build one graph from a SMILES string.
+        Generate a PyTorch Geometric graph from a SMILES string.
 
-        The partial-charge and bond-distance are set to zero.
+        Parameters
+        ----------
+        smiles: str
+            SMILES representation of the molecule to encode.
+        heavy_only: bool
+            Whether to include only bonds between heavy atoms.
+
+        Returns
+        -------
+        Graph
         """
+
         mol = Chem.MolFromSmiles(smiles, sanitize=True)
 
         atoms_encoding_array = self.encode_mol_atoms(mol)
@@ -196,7 +275,25 @@ class GraphVectorizer:
     def from_deepmol(self, deepmol: vantami.chem.molecule.DeepMolecule, charge_method: str = "Gasteiger",
                      energy_method: Optional[str] = None, heavy_only: bool = True, combine_hydrogens: bool = False) -> Graph:
         """
-        Build a heavy-atom graph from a prepared DeepMolecule.
+        Generate a PyTorch Geometric graph from a prepared DeepMolecule object.
+
+        Parameters
+        ----------
+        deepmol: DeepMolecule
+            Prepared molecule containing conformers and charge information.
+        charge_method: str
+            Method used to calculate or retrieve partial atomic charges.
+        energy_method: Optional[str]
+            Method used to select the lowest-energy conformer. If `None`, the default
+            conformer-selection method is used.
+        heavy_only: bool
+            Whether to include only heavy atoms and bonds between heavy atoms.
+        combine_hydrogens: bool
+            Whether to combine hydrogen charges with their associated heavy atoms.
+
+        Returns
+        -------
+        Graph
         """
         conf_id, _ = deepmol.get_lowest_energy_conformer(method=energy_method)
 
@@ -220,8 +317,18 @@ class GraphVectorizer:
 
     def encode_smiles(self, smiles: Union[str, Iterable[str]]) -> List[Graph]:
         """
-        Vectorize one SMILES or an iterable of SMILES strings.
+        Convert one or more SMILES strings into PyTorch Geometric graphs.
+
+        Parameters
+        ----------
+        smiles: Union[str, Iterable[str]]
+            A single SMILES string or an iterable of SMILES strings to encode.
+
+        Returns
+        -------
+        List[Graph]
         """
+
         if isinstance(smiles, str):
             return [self.from_smiles(smiles)]
 
@@ -232,19 +339,47 @@ class GraphVectorizer:
             raise TypeError(f"Expected < smiles > to be either str or Iterable[str], got {type(smiles)} instead.")
 
 
-    def encode_deepmol(self, deepmol: Union[DeepMolecule, Iterable[DeepMolecule]]) -> List[Graph]:
+    def encode_deepmol(self, deepmol: Union[DeepMolecule, Iterable[DeepMolecule]], charge_method: str = "Gasteiger",
+                     energy_method: Optional[str] = None, heavy_only: bool = True, combine_hydrogens: bool = False) -> List[Graph]:
         """
-        Vectorize one DeepMolecule or an iterable of DeepMolecules.
+        Convert one or more prepared DeepMolecule objects into graph representations.
+
+        Parameters
+        ----------
+        deepmol: Union[DeepMolecule, Iterable[DeepMolecule]]
+            A single prepared DeepMolecule object or an iterable of DeepMolecule
+            objects to encode.
+        charge_method: str
+            Method used to calculate or retrieve partial atomic charges.
+        energy_method: Optional[str]
+            Method used to select the lowest-energy conformer. If `None`, the default
+            conformer-selection method is used.
+        heavy_only: bool
+            Whether to include only heavy atoms and bonds between heavy atoms.
+        combine_hydrogens: bool
+            Whether to combine hydrogen charges with their associated heavy atoms.
+
+        Returns
+        -------
+        List[Graph]
         """
+
         try:
             from vantami.chem.molecule import DeepMolecule
         except ImportError as exc:
             raise ImportError(f"Method < encode_deepmol > requires < vantami > 0.5.2 or higher.")
         if isinstance(deepmol, DeepMolecule):
-            return [self.from_deepmol(deepmol)]
+            return [
+                self.from_deepmol(deepmol, charge_method=charge_method, energy_method=energy_method,
+                                  heavy_only=heavy_only, combine_hydrogens=combine_hydrogens),
+            ]
 
         elif hasattr(deepmol, "__iter__") and all (isinstance(item, DeepMolecule) for item in deepmol):
-            return [self.from_deepmol(dm) for dm in deepmol]
+            return [
+                self.from_deepmol(dm, charge_method=charge_method, energy_method=energy_method,
+                                  heavy_only=heavy_only, combine_hydrogens=combine_hydrogens)
+                for dm in deepmol
+            ]
 
         else:
             raise TypeError(f"Expected < deepmol > to be either DeepMolecule or Iterable[DeepMolecule],"
