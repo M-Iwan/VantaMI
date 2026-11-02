@@ -15,16 +15,15 @@ The usual versioning conventions are followed loosely, with minor version bumps 
 corresponding to a substantial update to a specific module.
 
 ### Repository Structure
-Current version: 0.5.1
+Current version: 0.5.2
 
 ```
 vantami/
 ├── deprecated/                    Old code
 ├── dev/                           New stuff / helper files
 ├── dist/                          PyPI distribution files
-├── environments/                  Environments for special-needs code (CDDD, Mordred) 
+├── environments/                  Environments for special-needs code (CDDD) 
 ├── vantami/
-│   ├── cache.py                   Functions for caching required data
 │   ├── api/
 │   │   ├── convert.py             Conversion from IUPAC names to SMILES using OPSIN
 │   │   └── resolve.py             Get SMILES from name using PubChem, CIR, or (WIP) CAS
@@ -46,13 +45,15 @@ vantami/
 │   │   ├── manager.py             Main class for managing data during training and inference
 │   │   ├── partition.py           Partitioning algoriths; convenience wrappers around scikit-learn and cluster.py
 │   │   └── transform.py           Main class for normalizing/processing data before training
-│   ├── deep/
+│   ├── dl/
 │   │   ├── dataset.py             MMDataset / MMBatch for multi-modal Polars-backed samples
 │   │   ├── loader.py              MMLoader (collate → MMBatch)
 │   │   ├── models.py              MMTUnit base class and concrete units (e.g. TestModel)
 │   │   ├── modules.py             GNN/CNN/RNN/linear builders used by units
 │   │   ├── utils.py               Activations and small helpers
-│   │   └── vectorizer.py          GraphVectorizer, StringVectorizer (legacy MMGV → deprecated.deep.mmgv)
+│   │   └── vectorizer/            Vectorizers
+│   │       ├── graph.py           GraphVectorizer
+│   │       └── string.py          StringVectorizer
 │   ├── io/
 │   │   ├── database.py            Preprocessing of ChEMBL and BindingDB files (largely useless)
 │   │   └── file.py                IO functions for several formats I'm using; works with Pandas/Polars DFs
@@ -81,13 +82,14 @@ vantami/
 │   │   ├── lmm.py                 Linear Mixed Models-realted code
 │   │   ├── tests.py               Statistical tests
 │   │   └── utils.py               Helper functions
-│   └── visualize/
-│       ├── ecdf.py                Emprical Cumulative Distribution Function of molecular inter-distance 
-│       ├── embedding.py           t-SNE and UMAP
-│       ├── performance.py         WIP: AU-GOOD framework-related plots
-│       ├── predictions.py         Bunch of plots for assessing model performance; currently only Regression
-│       ├── properties.py          Plot and compare molecular properties between datasets
-│       └── utils.py               Helper functions and my custom palette
+│   ├── visualize/
+│   │   ├── ecdf.py                Emprical Cumulative Distribution Function of molecular inter-distance 
+│   │   ├── embedding.py           t-SNE and UMAP
+│   │   ├── performance.py         WIP: AU-GOOD framework-related plots
+│   │   ├── predictions.py         Bunch of plots for assessing model performance; currently only Regression
+│   │   ├── properties.py          Plot and compare molecular properties between datasets
+│   │   └── utils.py               Helper functions and my custom palette
+│   └── paths.py                   Paths for locally saved models and data
 ├── vantami-r/
 │   └── R/
 │       └── lmm.R                  Linear Mixed Models code
