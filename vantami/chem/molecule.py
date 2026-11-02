@@ -5,21 +5,23 @@ TODO: Make the Molecule class an ABC, then DockMolecule and DeepMolecule should 
 
 from __future__ import annotations
 
-from typing import Any, Literal, Optional, TypeAlias
-import joblib
+import warnings
 from pathlib import Path
+from typing import Any, Literal, Optional
 
+import joblib
 import numpy as np
 import numpy.typing as npt
+
 from rdkit import Chem
 from rdkit.Chem import Draw, rdPartialCharges
 from rdkit.Chem.AllChem import (ETKDGv4, EmbedMultipleConfs, MMFFGetMoleculeForceField, MMFFGetMoleculeProperties,
     MMFFOptimizeMolecule, UFFGetMoleculeForceField, UFFHasAllMoleculeParams, UFFOptimizeMolecule)
 
 
-MMFFVariant: TypeAlias = Literal["MMFF94", "MMFF94s"]
-OptimizationMethod: TypeAlias = Literal["MMFF94", "MMFF94s", "UFF", "GFN2-xTB"]
-ChargeMethod: TypeAlias = Literal["Gasteiger", "MMFF94", "MMFF94s", "GFN2-xTB"]
+MMFFVariant = Literal["MMFF94", "MMFF94s"]
+OptimizationMethod = Literal["MMFF94", "MMFF94s", "UFF", "GFN2-xTB"]
+ChargeMethod = Literal["Gasteiger", "MMFF94", "MMFF94s", "GFN2-xTB"]
 
 
 class Molecule:
@@ -745,8 +747,15 @@ class DeepMolecule:
     """
     RDKit molecule representation prepared for graph-based deep-learning models.
     """
-
     def __init__(self, smiles: str):
+        """
+        Initialize a molecule from a SMILES representation.
+
+        Parameters
+        ----------
+        smiles: str
+            SMILES representation used to construct the RDKit molecule.
+        """
         self.smiles = smiles
         if isinstance(self.smiles, str):
             self.mol = Chem.MolFromSmiles(smiles)
@@ -940,7 +949,16 @@ class DeepMolecule:
 
     def get_atom_indices(self, heavy_only: bool = False) -> npt.NDArray[np.int64]:
         """
-        Return atom indices in GraphVectorizer-compatible RDKit order.
+        Return RDKit atom indices in graph-compatible atom order.
+
+        Parameters
+        ----------
+        heavy_only: bool
+            Whether to return only indices for non-hydrogen atoms.
+
+        Returns
+        -------
+        npt.NDArray[np.int64]
         """
         return np.asarray(
             [
@@ -952,7 +970,16 @@ class DeepMolecule:
 
     def get_atoms(self, heavy_only: bool = False) -> tuple[Chem.rdchem.Atom, ...]:
         """
-        Return atoms in stable RDKit atom-index order.
+        Return RDKit atoms in stable atom-index order.
+
+        Parameters
+        ----------
+        heavy_only: bool
+            Whether to return only non-hydrogen atoms.
+
+        Returns
+        -------
+        tuple[Chem.rdchem.Atom, ...]
         """
         return tuple(
             atom for atom in self.mol.GetAtoms()
@@ -961,7 +988,16 @@ class DeepMolecule:
 
     def get_bonds(self, heavy_only: bool = False) -> tuple[Chem.rdchem.Bond, ...]:
         """
-        Return bonds, optionally excluding bonds connected to hydrogen atoms.
+        Return RDKit bonds in molecular bond order.
+
+        Parameters
+        ----------
+        heavy_only: bool
+            Whether to return only bonds whose endpoints are both non-hydrogen atoms.
+
+        Returns
+        -------
+        tuple[Chem.rdchem.Bond, ...]
         """
         return tuple(
             bond for bond in self.mol.GetBonds()
@@ -971,7 +1007,18 @@ class DeepMolecule:
 
     def get_conformer_positions(self, conf_id: int = -1, heavy_only: bool = False) -> npt.NDArray[np.float32]:
         """
-        Return coordinates in the same atom order as .get_atoms().
+        Return conformer coordinates in graph-compatible atom order.
+
+        Parameters
+        ----------
+        conf_id: int
+            RDKit conformer identifier. A value of `-1` selects the default conformer.
+        heavy_only: bool
+            Whether to return coordinates only for non-hydrogen atoms.
+
+        Returns
+        -------
+        npt.NDArray[np.float32]
         """
         conformer = self.mol.GetConformer(conf_id)
         positions = np.asarray(conformer.GetPositions(), dtype=np.float32)
@@ -1003,10 +1050,21 @@ class DeepMolecule:
 
     def conformers(self, n_conformers: int = 1, seed: int = 42, prune_threshold: float = 0.25) -> tuple[int, ...]:
         """
-        Generate distinct explicit-hydrogen 3D conformers with ETKDGv4.
+        Generate explicit-hydrogen three-dimensional conformers with ETKDGv4.
 
-        Conformers within < prune_rms_threshold > Å RMSD of an already accepted conformer are discarded
-        by RDKit during embedding. Set the threshold to a negative value to disable RMSD-based pruning.
+        Parameters
+        ----------
+        n_conformers: int
+            Number of conformers requested before RMSD-based pruning.
+        seed: int
+            Random seed supplied to RDKit during conformer embedding.
+        prune_threshold: float
+            RMSD threshold in Ångström for removing similar conformers. A negative
+            value disables RMSD-based pruning.
+
+        Returns
+        -------
+        tuple[int, ...]
         """
         embedded_mol = self._with_hs(self.mol)
         embedded_mol.RemoveAllConformers()
@@ -1039,25 +1097,23 @@ class DeepMolecule:
         Parameters
         ----------
         n_conformers: int
-            Number of conformers requested before RMSD pruning.
+            Number of conformers requested before RMSD-based pruning.
         method: OptimizationMethod
-            Optimization method: "MMFF94", "MMFF94s", "UFF", or "XTB-GFN2".
+            Optimization method used for each generated conformer.
         seed: int
-            Random seed supplied to RDKit ETKDGv4.
+            Random seed supplied to RDKit during conformer embedding.
         prune_threshold: float
-            RDKit RMSD threshold in Å for discarding similar conformers.
+            RMSD threshold in Ångström for removing similar conformers.
         max_iterations: int
-            Maximum optimization iterations or xTB optimization steps.
-        charge: int
-            Optional total molecular charge for xTB calculations.
-        uhf: int
-            Optional number of unpaired electrons for xTB calculations.
+            Maximum number of optimization iterations or xTB optimization steps.
+        charge: Optional[int]
+            Total molecular charge used for xTB calculations.
+        uhf: Optional[int]
+            Number of unpaired electrons used for xTB calculations.
 
         Returns
         -------
-        conf_id, energy
-            RDKit conformer ID and optimized energy for the minimum-energy conformer.
-            The optimized conformers and their cached properties remain available on the molecule.
+        tuple[int, float]
         """
         conformer_ids = self.conformers(n_conformers=n_conformers, seed=seed, prune_threshold=prune_threshold)
 
@@ -1079,8 +1135,18 @@ class DeepMolecule:
 
     def get_lowest_energy_conformer(self, method: Optional[OptimizationMethod] = None) -> tuple[int, float]:
         """
-        Return the cached lowest-energy conformer for one calculation method.
+        Return the cached lowest-energy conformer for an optimization method.
+
+        Parameters
+        ----------
+        method: Optional[OptimizationMethod]
+            Optimization method used to select cached conformer energies.
+
+        Returns
+        -------
+        tuple[int, float]
         """
+
         selected_method = method or self.lowest_energy_method
 
         if selected_method is None:
@@ -1101,12 +1167,18 @@ class DeepMolecule:
 
         return lowest_conf_id, lowest_energy
 
-    def save(self, path: str | Path) -> Path:
+    def save(self, path: Union[str, Path]) -> Path:
         """
-        Serialize the molecule, conformers, and calculated properties.
+        Serialize the molecule, conformers, and cached calculation results.
 
-        The saved state includes the RDKit molecule, conformers, cached energies, charge sets, descriptors,
-        molecular charge, spin state, and optimization count. Use < DeepMolecule.load(path) > to restore the object.
+        Parameters
+        ----------
+        path: Union[str, Path]
+            Destination path for the serialized molecule state.
+
+        Returns
+        -------
+        Path
         """
         output_path = Path(path)
 
@@ -1133,9 +1205,18 @@ class DeepMolecule:
 
 
     @classmethod
-    def load(cls, path: str | Path) -> DeepMolecule:
+    def load(cls, path: Union[str, Path]) -> DeepMolecule:
         """
-        Restore a serialized DeepMolecule instance.
+        Restore a serialized molecule instance from disk.
+
+        Parameters
+        ----------
+        path: Union[str, Path]
+            Path to the serialized molecule state.
+
+        Returns
+        -------
+        DeepMolecule
         """
         input_path = Path(path)
         state = joblib.load(input_path)
@@ -1165,8 +1246,22 @@ class DeepMolecule:
 
     def optimize_mmff(self, conf_id: int = -1, variant: MMFFVariant = "MMFF94s", max_iterations: int = 1024) -> tuple[float, bool]:
         """
-        Optimize a conformer with MMFF94 or MMFF94s.
+        Optimize a conformer using the MMFF94 or MMFF94s force field.
+
+        Parameters
+        ----------
+        conf_id: int
+            RDKit conformer identifier to optimize. A value of `-1` selects the default conformer.
+        variant: MMFFVariant
+            MMFF force-field variant used for geometry optimization.
+        max_iterations: int
+            Maximum number of force-field optimization iterations.
+
+        Returns
+        -------
+        tuple[float, bool]
         """
+
         conf_id = self.mol.GetConformer(conf_id).GetId()
         properties = MMFFGetMoleculeProperties(self.mol, mmffVariant=variant)
 
@@ -1189,7 +1284,18 @@ class DeepMolecule:
 
     def optimize_uff(self, conf_id: int = -1, max_iterations: int = 1024) -> tuple[float, bool]:
         """
-        Optimize a conformer with the Universal Force Field.
+        Optimize a conformer using the Universal Force Field.
+
+        Parameters
+        ----------
+        conf_id: int
+            RDKit conformer identifier to optimize. A value of `-1` selects the default conformer.
+        max_iterations: int
+            Maximum number of force-field optimization iterations.
+
+        Returns
+        -------
+        tuple[float, bool]
         """
         conf_id = self.mol.GetConformer(conf_id).GetId()
 
@@ -1212,7 +1318,26 @@ class DeepMolecule:
     def optimize_xtb(self, conf_id: int = -1, charge: Optional[int] = None, uhf: Optional[int] = None,
                      method: str = "GFN2-xTB", max_steps: int = 256, fmax: float = 0.01) -> tuple[float, bool]:
         """
-        Optimize a conformer with GFN2-xTB through ASE.
+        Optimize a conformer using GFN2-xTB through ASE.
+
+        Parameters
+        ----------
+        conf_id: int
+            RDKit conformer identifier to optimize. A value of `-1` selects the default conformer.
+        charge: Optional[int]
+            Total molecular charge. If `None`, the formal molecular charge is used.
+        uhf: Optional[int]
+            Number of unpaired electrons. If `None`, the molecular radical-electron count is used.
+        method: str
+            xTB method name supplied to the xTB calculator.
+        max_steps: int
+            Maximum number of ASE geometry-optimization steps.
+        fmax: float
+            Maximum force threshold used as the ASE convergence criterion.
+
+        Returns
+        -------
+        tuple[float, bool]
         """
         try:
             from ase.optimize import BFGS
@@ -1250,7 +1375,24 @@ class DeepMolecule:
     def optimize(self, conf_id: int = -1, method: OptimizationMethod = "MMFF94s", max_iterations: int = 1024,
                  charge: Optional[int] = None, uhf: Optional[int] = None) -> tuple[float, str, bool]:
         """
-        Optimize a conformer with MMFF94, MMFF94s, UFF, or xTB GFN2-xTB.
+        Optimize a conformer using the selected molecular-mechanics or xTB method.
+
+        Parameters
+        ----------
+        conf_id: int
+            RDKit conformer identifier to optimize. A value of `-1` selects the default conformer.
+        method: OptimizationMethod
+            Optimization method to apply.
+        max_iterations: int
+            Maximum force-field iterations or xTB optimization steps.
+        charge: Optional[int]
+            Total molecular charge used for xTB calculations.
+        uhf: Optional[int]
+            Number of unpaired electrons used for xTB calculations.
+
+        Returns
+        -------
+        tuple[float, str, bool]
         """
         if method in ("MMFF94", "MMFF94s"):
             energy, converged = self.optimize_mmff(
@@ -1277,28 +1419,40 @@ class DeepMolecule:
 
     def get_mmff_energy(self, conf_id: int = -1, variant: MMFFVariant = "MMFF94s") -> float:
         """
-        Calculate and store the current MMFF conformer energy.
+        Calculate and cache the current MMFF conformer energy.
+
+        Parameters
+        ----------
+        conf_id: int
+            RDKit conformer identifier. A value of `-1` selects the default conformer.
+        variant: MMFFVariant
+            MMFF force-field variant used to calculate the energy.
+
+        Returns
+        -------
+        float
         """
         conf_id = self.mol.GetConformer(conf_id).GetId()
         properties = MMFFGetMoleculeProperties(self.mol, mmffVariant=variant)
-        force_field = MMFFGetMoleculeForceField(
-            self.mol,
-            properties,
-            confId=conf_id,
-        )
+        force_field = MMFFGetMoleculeForceField(self.mol, properties, confId=conf_id)
 
         if force_field is None:
             raise RuntimeError(f"RDKit could not construct {variant} for < {self.smiles!r} >.")
 
-        return self._store_energy(
-            energy=force_field.CalcEnergy(),
-            method=variant,
-            conf_id=conf_id,
-        )
+        return self._store_energy(energy=force_field.CalcEnergy(), method=variant, conf_id=conf_id)
 
     def get_uff_energy(self, conf_id: int = -1) -> float:
         """
-        Calculate and store the current UFF conformer energy.
+        Calculate and cache the current UFF conformer energy.
+
+        Parameters
+        ----------
+        conf_id: int
+            RDKit conformer identifier. A value of `-1` selects the default conformer.
+
+        Returns
+        -------
+        float
         """
         conf_id = self.mol.GetConformer(conf_id).GetId()
         force_field = UFFGetMoleculeForceField(self.mol, confId=conf_id)
@@ -1306,16 +1460,27 @@ class DeepMolecule:
         if force_field is None:
             raise RuntimeError(f"RDKit could not construct UFF for < {self.smiles!r} >.")
 
-        return self._store_energy(
-            energy=force_field.CalcEnergy(),
-            method="UFF",
-            conf_id=conf_id,
-        )
+        return self._store_energy(energy=force_field.CalcEnergy(), method="UFF", conf_id=conf_id)
 
     def get_xtb_energy(self, conf_id: int = -1, charge: Optional[int] = None, uhf: Optional[int] = None,
                        method: str = "GFN2-xTB") -> float:
         """
-        Calculate and store a GFN2-xTB single-point energy and descriptors.
+        Calculate and cache a GFN2-xTB single-point energy and descriptors.
+
+        Parameters
+        ----------
+        conf_id: int
+            RDKit conformer identifier. A value of `-1` selects the default conformer.
+        charge: Optional[int]
+            Total molecular charge. If `None`, the formal molecular charge is used.
+        uhf: Optional[int]
+            Number of unpaired electrons. If `None`, the molecular radical-electron count is used.
+        method: str
+            xTB method name supplied to the xTB calculator.
+
+        Returns
+        -------
+        float
         """
         conf_id = self.mol.GetConformer(conf_id).GetId()
         atoms, charge, uhf = self._get_xtb_atoms(
@@ -1336,11 +1501,7 @@ class DeepMolecule:
 
         self.charge = charge
         self.uhf = uhf
-        self._store_charges(
-            charges=charges,
-            method="GFN2-xTB",
-            conf_id=conf_id,
-        )
+        self._store_charges(charges=charges, method="GFN2-xTB", conf_id=conf_id)
 
         return self._store_energy(
             energy=energy,
@@ -1353,7 +1514,18 @@ class DeepMolecule:
 
     def get_energy(self, method: OptimizationMethod, conf_id: int = -1) -> float:
         """
-        Calculate and return a conformer energy using the selected method.
+        Calculate and cache a conformer energy using the selected method.
+
+        Parameters
+        ----------
+        method: OptimizationMethod
+            Energy-calculation method to use.
+        conf_id: int
+            RDKit conformer identifier. A value of `-1` selects the default conformer.
+
+        Returns
+        -------
+        float
         """
         if method in ("MMFF94", "MMFF94s"):
             return self.get_mmff_energy(conf_id=conf_id, variant=method)
@@ -1371,7 +1543,11 @@ class DeepMolecule:
 
     def get_gasteiger_charges(self) -> npt.NDArray[np.float32]:
         """
-        Calculate RDKit Gasteiger partial charges.
+        Calculate and cache RDKit Gasteiger partial charges.
+
+        Returns
+        -------
+        npt.NDArray[np.float32]
         """
         self._prepare_for_charge_calculation()
 
@@ -1392,7 +1568,16 @@ class DeepMolecule:
 
     def get_mmff_charges(self, variant: MMFFVariant = "MMFF94s") -> npt.NDArray[np.float32]:
         """
-        Calculate MMFF94 or MMFF94s partial charges.
+        Calculate and cache MMFF partial charges.
+
+        Parameters
+        ----------
+        variant: MMFFVariant
+            MMFF force-field variant used to calculate the partial charges.
+
+        Returns
+        -------
+        npt.NDArray[np.float32]
         """
         self._prepare_for_charge_calculation()
 
@@ -1418,7 +1603,23 @@ class DeepMolecule:
     def get_xtb_charges(self, conf_id: int = -1, charge: Optional[int] = None, uhf: Optional[int] = None,
                         method: str = "GFN2-xTB") -> npt.NDArray[np.float32]:
         """
-        Calculate GFN2-xTB Mulliken partial charges for one conformer.
+        Calculate and cache GFN2-xTB Mulliken partial charges for one conformer.
+
+        Parameters
+        ----------
+        conf_id: int
+            RDKit conformer identifier used for the xTB calculation. A value of `-1` selects the default conformer.
+        charge: Optional[int]
+            Total molecular charge. If `None`, the formal molecular charge is used.
+        uhf: Optional[int]
+            Number of unpaired electrons. If `None`, the molecular radical-electron
+            count is used.
+        method: str
+            xTB method name supplied to the xTB calculator.
+
+        Returns
+        -------
+        npt.NDArray[np.float32]
         """
         conf_id = self.mol.GetConformer(conf_id).GetId()
 
@@ -1438,20 +1639,25 @@ class DeepMolecule:
     def get_charges(self, method: ChargeMethod = "Gasteiger", conf_id: int = -1, heavy_only: bool = True,
                     combine_hydrogens: bool = False) -> npt.NDArray[np.float32]:
         """
-        Return partial charges.
+        Return partial atomic charges using the selected charge-calculation method.
 
         Parameters
         ----------
-        method
-            "Gasteiger", "MMFF94", "MMFF94s", or "GFN2-xTB".
-        conf_id
-            Conformer ID used for conformer-dependent xTB charges.
-        heavy_only
-            Return only non-hydrogen atom charges.
-        combine_hydrogens
-            Return heavy-atom charges after adding each directly bonded
-            hydrogen charge to its respective heavy atom.
+        method: ChargeMethod
+            Method used to calculate partial charges.
+        conf_id: int
+            RDKit conformer identifier used for conformer-dependent charges. A value of `-1` selects the default conformer.
+        heavy_only: bool
+            Whether to return charges only for non-hydrogen atoms.
+        combine_hydrogens: bool
+            Whether to add each directly bonded hydrogen charge to its associated
+            heavy-atom charge.
+
+        Returns
+        -------
+        npt.NDArray[np.float32]
         """
+
         if method == "Gasteiger":
             charges = self.get_gasteiger_charges()
         elif method in ("MMFF94", "MMFF94s"):
@@ -1482,7 +1688,18 @@ class DeepMolecule:
 
     def get_descriptors(self, method: OptimizationMethod, conf_id: int = -1) -> dict[str, Any]:
         """
-        Return stored descriptors for a completed conformer calculation.
+        Return cached descriptors for a conformer calculation.
+
+        Parameters
+        ----------
+        method: OptimizationMethod
+            Calculation method used to identify the cached descriptors.
+        conf_id: int
+            RDKit conformer identifier. A value of `-1` selects the default conformer.
+
+        Returns
+        -------
+        dict[str, Any]
         """
         conf_id = self._resolve_conf_id(conf_id)
         key = (conf_id, method)
