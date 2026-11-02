@@ -1,4 +1,7 @@
-"""Small-molecule preparation, docking, and interaction-fingerprint utilities."""
+"""
+Small-molecule preparation, docking, and interaction-fingerprint utilities.
+TODO: Make the Molecule class an ABC, then DockMolecule and DeepMolecule should inherit from it
+"""
 
 from __future__ import annotations
 
@@ -15,8 +18,8 @@ from rdkit.Chem.AllChem import (ETKDGv4, EmbedMultipleConfs, MMFFGetMoleculeForc
 
 
 MMFFVariant: TypeAlias = Literal["MMFF94", "MMFF94s"]
-OptimizationMethod: TypeAlias = Literal["MMFF94", "MMFF94s", "UFF", "XTB-GFN2"]
-ChargeMethod: TypeAlias = Literal["Gasteiger", "MMFF94", "MMFF94s", "XTB-GFN2"]
+OptimizationMethod: TypeAlias = Literal["MMFF94", "MMFF94s", "UFF", "GFN2-xTB"]
+ChargeMethod: TypeAlias = Literal["Gasteiger", "MMFF94", "MMFF94s", "GFN2-xTB"]
 
 
 class Molecule:
@@ -738,11 +741,6 @@ class Molecule:
         return molecule
 
 
-MMFFVariant: TypeAlias = Literal["MMFF94", "MMFF94s"]
-OptimizationMethod: TypeAlias = Literal["MMFF94", "MMFF94s", "UFF", "GFN2-xTB"]
-ChargeMethod: TypeAlias = Literal["Gasteiger", "MMFF94", "MMFF94s", "GFN2-xTB"]
-
-
 class DeepMolecule:
     """
     RDKit molecule representation prepared for graph-based deep-learning models.
@@ -750,7 +748,10 @@ class DeepMolecule:
 
     def __init__(self, smiles: str):
         self.smiles = smiles
-        self.mol = Chem.MolFromSmiles(smiles)
+        if isinstance(self.smiles, str):
+            self.mol = Chem.MolFromSmiles(smiles)
+        if self.mol is None:
+            warnings.warn(f"Unable to construct a valid molecule from < {smiles:r} >")
 
         self.energy: Optional[float] = None
         self.energy_method: Optional[str] = None
