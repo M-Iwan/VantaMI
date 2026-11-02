@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from typing import Any, Literal, Optional, TypeAlias
+import joblib
+from pathlib import Path
 
 import numpy as np
 import numpy.typing as npt
@@ -755,6 +757,8 @@ class DeepMolecule:
         self.charge: Optional[int] = None
         self.uhf: Optional[int] = None
         self.n_optimized: int = 0
+        self.lowest_energy_conf_id: Optional[int] = None
+        self.lowest_energy_method: Optional[OptimizationMethod] = None
 
         self._energies: dict[tuple[int, str], float] = {}
         self._charge_sets: dict[tuple[Optional[int], str], npt.NDArray[np.float32]] = {}
@@ -785,13 +789,16 @@ class DeepMolecule:
 
     def _clear_calculation_results(self) -> None:
         """
-        Remove energies, charges, and descriptors invalidated by geometry changes.
+        Remove results invalidated by replacing molecular topology or conformers.
         """
         self.energy = None
         self.energy_method = None
         self.charge = None
         self.uhf = None
         self.n_optimized = 0
+
+        self.lowest_energy_conf_id = None
+        self.lowest_energy_method = None
 
         self._energies.clear()
         self._charge_sets.clear()
@@ -805,6 +812,28 @@ class DeepMolecule:
 
         if self.mol.HasProp("partial_charge_method"):
             self.mol.ClearProp("partial_charge_method")
+
+    def _clear_conformer_results(self, conf_id: int) -> None:
+        """
+        Remove cached conformer-dependent results before geometry optimization.
+        """
+        resolved_conf_id = self._resolve_conf_id(conf_id)
+
+        for key in list(self._energies):
+            if key[0] == resolved_conf_id:
+                del self._energies[key]
+
+        for key in list(self._descriptors):
+            if key[0] == resolved_conf_id:
+                del self._descriptors[key]
+
+        for key in list(self._charge_sets):
+            if key[0] == resolved_conf_id:
+                del self._charge_sets[key]
+
+        if self.lowest_energy_conf_id == resolved_conf_id:
+            self.lowest_energy_conf_id = None
+            self.lowest_energy_method = None
 
     def _resolve_conf_id(self, conf_id: int = -1) -> int:
         """
@@ -990,7 +1019,7 @@ class DeepMolecule:
         parameters = ETKDGv4()
         parameters.randomSeed = seed
         parameters.useSmallRingTorsions = True
-        parameters.pruneRmsThresh = prune_rms_threshold
+        parameters.pruneRmsThresh = prune_threshold
 
         conformer_ids = tuple(
             int(conf_id)
@@ -1046,11 +1075,36 @@ class DeepMolecule:
 
         lowest_conf_id, lowest_energy = min(results, key=lambda result: result[1])
 
+        self.lowest_energy_conf_id = lowest_conf_id
+        self.lowest_energy_method = method
         self.energy = lowest_energy
         self.energy_method = method
 
         return lowest_conf_id, lowest_energy
 
+    def get_lowest_energy_conformer(self, method: Optional[OptimizationMethod] = None) -> tuple[int, float]:
+        """
+        Return the cached lowest-energy conformer for one calculation method.
+        """
+        selected_method = method or self.lowest_energy_method
+
+        if selected_method is None:
+            raise ValueError("No lowest-energy conformer is available. Call lowest_energy_conformer() first.")
+
+        energies = [
+            (conf_id, energy) for (conf_id, energy_method), energy in self._energies.items()
+            if energy_method == selected_method
+        ]
+
+        if not energies:
+            raise ValueError(f"No cached < {selected_method} > conformer energies are available.")
+
+        lowest_conf_id, lowest_energy = min(energies, key=lambda result: result[1])
+
+        self.lowest_energy_conf_id = lowest_conf_id
+        self.lowest_energy_method = selected_method
+
+        return lowest_conf_id, lowest_energy
 
     def save(self, path: str | Path) -> Path:
         """
@@ -1069,6 +1123,8 @@ class DeepMolecule:
             "charge": self.charge,
             "uhf": self.uhf,
             "n_optimized": self.n_optimized,
+            "lowest_energy_conf_id": self.lowest_energy_conf_id,
+            "lowest_energy_method": self.lowest_energy_method,
             "energies": self._energies,
             "charge_sets": self._charge_sets,
             "descriptors": self._descriptors,
@@ -1099,6 +1155,9 @@ class DeepMolecule:
         molecule.uhf = state["uhf"]
         molecule.n_optimized = state["n_optimized"]
 
+        molecule.lowest_energy_conf_id = state.get("lowest_energy_conf_id")
+        molecule.lowest_energy_method = state.get("lowest_energy_method")
+
         molecule._energies = state["energies"]
         molecule._charge_sets = {
             key: np.asarray(values, dtype=np.float32).copy()
@@ -1119,6 +1178,8 @@ class DeepMolecule:
         if properties is None:
             raise ValueError(f"MMFF parameters are unavailable for < {self.smiles!r} >.")
 
+        self._clear_conformer_results(resolved_conf_id)
+
         status = MMFFOptimizeMolecule(
             self.mol,
             mmffVariant=variant,
@@ -1126,7 +1187,6 @@ class DeepMolecule:
             confId=resolved_conf_id,
         )
 
-        self._clear_calculation_results()
         energy = self.get_mmff_energy(conf_id=resolved_conf_id, variant=variant)
         self.n_optimized += 1
 
@@ -1141,13 +1201,14 @@ class DeepMolecule:
         if not UFFHasAllMoleculeParams(self.mol):
             raise ValueError(f"UFF parameters are unavailable for < {self.smiles!r} >.")
 
+        self._clear_conformer_results(resolved_conf_id)
+
         status = UFFOptimizeMolecule(
             self.mol,
             maxIters=max_iterations,
             confId=resolved_conf_id,
         )
 
-        self._clear_calculation_results()
         energy = self.get_uff_energy(conf_id=resolved_conf_id)
         self.n_optimized += 1
 
@@ -1171,6 +1232,8 @@ class DeepMolecule:
             method=method,
         )
 
+        self._clear_conformer_results(resolved_conf_id)
+
         optimizer = BFGS(atoms, logfile=None)
         converged = bool(optimizer.run(fmax=fmax, steps=max_steps))
 
@@ -1178,7 +1241,6 @@ class DeepMolecule:
             conf_id=resolved_conf_id,
             positions=atoms.get_positions(),
         )
-        self._clear_calculation_results()
 
         energy = self.get_xtb_energy(
             conf_id=resolved_conf_id,
