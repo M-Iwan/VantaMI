@@ -17,7 +17,6 @@ MolID: TypeAlias = str | int
 MoleculeInput: TypeAlias = tuple[MolID, str]
 
 
-
 def _run_conformer_search(mol_id: MolID, smiles: str, molecule: DeepMolecule, options: Mapping[str, Any]):
     """
     Run a conformer search and capture any exception as a result record.
