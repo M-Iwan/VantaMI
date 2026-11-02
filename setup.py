@@ -9,13 +9,14 @@ package_data: dict[str, list[str]] = {
         "files/klekota_roth.joblib",
         "files/unipka/build_unipka.sh",
         "files/unipka/test_unipka.sh",
+        "files/unipka/prepare_unipka.sh",
         "files/unipka/run_unipka.sh"
     ],
 }
 
 setup(
     name="vantami",
-    version="0.5.2.rc1",
+    version="0.5.2",
     author="Mateusz Iwan",
     author_email="mateusz.iwan@hotmail.com",
     description="A collection of ML/AI tools for chemistry applications.",
