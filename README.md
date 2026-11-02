@@ -15,7 +15,7 @@ The usual versioning conventions are followed loosely, with minor version bumps 
 corresponding to a substantial update to a specific module.
 
 ### Repository Structure
-Current version: 0.5.2
+Current version: 0.5.2.rc1
 
 ```
 vantami/
