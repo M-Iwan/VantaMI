@@ -1,5 +1,5 @@
 from vantami import api
-from vantami import chemistry
+from vantami import chem
 from vantami import cli
 from vantami import data
 from vantami import dl

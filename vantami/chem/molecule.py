@@ -16,7 +16,7 @@ from rdkit.Chem.AllChem import (ETKDGv4, EmbedMultipleConfs, MMFFGetMoleculeForc
 
 MMFFVariant: TypeAlias = Literal["MMFF94", "MMFF94s"]
 OptimizationMethod: TypeAlias = Literal["MMFF94", "MMFF94s", "UFF", "XTB-GFN2"]
-ChargeMethod: TypeAlias = Literal["GASTEIGER", "MMFF94", "MMFF94s", "XTB-GFN2"]
+ChargeMethod: TypeAlias = Literal["Gasteiger", "MMFF94", "MMFF94s", "XTB-GFN2"]
 
 
 class Molecule:
@@ -361,9 +361,9 @@ class Molecule:
             [float(atom.GetProp("_GasteigerCharge")) for atom in self.mol.GetAtoms()],
             dtype=float,
         )
-        self._store_charges(self.mol, charges, "GASTEIGER")
+        self._store_charges(self.mol, charges, "Gasteiger")
         self.charges = charges
-        self.charge_method = "GASTEIGER"
+        self.charge_method = "Gasteiger"
         return charges
 
     def mmff_charges(self, variant: str = "MMFF94s") -> np.ndarray:
@@ -739,8 +739,8 @@ class Molecule:
 
 
 MMFFVariant: TypeAlias = Literal["MMFF94", "MMFF94s"]
-OptimizationMethod: TypeAlias = Literal["MMFF94", "MMFF94s", "UFF", "XTB-GFN2"]
-ChargeMethod: TypeAlias = Literal["GASTEIGER", "MMFF94", "MMFF94s", "XTB-GFN2"]
+OptimizationMethod: TypeAlias = Literal["MMFF94", "MMFF94s", "UFF", "GFN2-xTB"]
+ChargeMethod: TypeAlias = Literal["Gasteiger", "MMFF94", "MMFF94s", "GFN2-xTB"]
 
 
 class DeepMolecule:
@@ -817,42 +817,36 @@ class DeepMolecule:
         """
         Remove cached conformer-dependent results before geometry optimization.
         """
-        resolved_conf_id = self._resolve_conf_id(conf_id)
+        conf_id = self.mol.GetConformer(conf_id).GetId()
 
         for key in list(self._energies):
-            if key[0] == resolved_conf_id:
+            if key[0] == conf_id:
                 del self._energies[key]
 
         for key in list(self._descriptors):
-            if key[0] == resolved_conf_id:
+            if key[0] == conf_id:
                 del self._descriptors[key]
 
         for key in list(self._charge_sets):
-            if key[0] == resolved_conf_id:
+            if key[0] == conf_id:
                 del self._charge_sets[key]
 
-        if self.lowest_energy_conf_id == resolved_conf_id:
+        if self.lowest_energy_conf_id == conf_id:
             self.lowest_energy_conf_id = None
             self.lowest_energy_method = None
-
-    def _resolve_conf_id(self, conf_id: int = -1) -> int:
-        """
-        Resolve an RDKit conformer identifier.
-        """
-        return self.mol.GetConformer(conf_id).GetId()
 
     def _store_energy(self, energy: float, method: OptimizationMethod, conf_id: int, **descriptors: Any) -> float:
         """
         Store an energy and descriptors for a conformer calculation.
         """
         energy = float(energy)
-        resolved_conf_id = self._resolve_conf_id(conf_id)
+        conf_id = self.mol.GetConformer(conf_id).GetId()
 
-        self._energies[(resolved_conf_id, method)] = energy
-        self._descriptors[(resolved_conf_id, method)] = {
+        self._energies[(conf_id, method)] = energy
+        self._descriptors[(conf_id, method)] = {
             "energy": energy,
             "method": method,
-            "conf_id": resolved_conf_id,
+            "conf_id": conf_id,
             **descriptors,
         }
 
@@ -869,7 +863,7 @@ class DeepMolecule:
         values = values.reshape(self.mol.GetNumAtoms())
 
         if conf_id is not None:
-            conf_id = self._resolve_conf_id(conf_id)
+            conf_id = self.mol.GetConformer(conf_id).GetId()
 
         self._charge_sets[(conf_id, method)] = values.copy()
         self._active_charge_method = method
@@ -887,11 +881,11 @@ class DeepMolecule:
         Return cached charges for a method and conformer, if present.
         """
         if conf_id is not None:
-            conf_id = self._resolve_conf_id(conf_id)
+            conf_id = self.mol.GetConformer(conf_id).GetId()
 
         charges = self._charge_sets.get((conf_id, method))
 
-        if charges is None and method == "GASTEIGER":
+        if charges is None and method == "Gasteiger":
             charges = self._charge_sets.get((None, method))
 
         return None if charges is None else charges.copy()
@@ -916,8 +910,8 @@ class DeepMolecule:
         except ImportError as exc:
             raise ImportError("xTB calculations require ASE and xtb-python.") from exc
 
-        resolved_conf_id = self._resolve_conf_id(conf_id)
-        conformer = self.mol.GetConformer(resolved_conf_id)
+        conf_id = self.mol.GetConformer(conf_id).GetId()
+        conformer = self.mol.GetConformer(conf_id)
 
         if charge is None:
             charge = sum(atom.GetFormalCharge() for atom in self.mol.GetAtoms())
@@ -938,7 +932,7 @@ class DeepMolecule:
         """
         Copy optimized Cartesian coordinates back into the RDKit conformer.
         """
-        conformer = self.mol.GetConformer(self._resolve_conf_id(conf_id))
+        conformer = self.mol.GetConformer(self.mol.GetConformer(conf_id).GetId())
 
         for atom_index, position in enumerate(np.asarray(positions, dtype=float)):
             conformer.SetAtomPosition(atom_index, position)
@@ -1172,22 +1166,22 @@ class DeepMolecule:
         """
         Optimize a conformer with MMFF94 or MMFF94s.
         """
-        resolved_conf_id = self._resolve_conf_id(conf_id)
+        conf_id = self.mol.GetConformer(conf_id).GetId()
         properties = MMFFGetMoleculeProperties(self.mol, mmffVariant=variant)
 
         if properties is None:
             raise ValueError(f"MMFF parameters are unavailable for < {self.smiles!r} >.")
 
-        self._clear_conformer_results(resolved_conf_id)
+        self._clear_conformer_results(conf_id)
 
         status = MMFFOptimizeMolecule(
             self.mol,
             mmffVariant=variant,
             maxIters=max_iterations,
-            confId=resolved_conf_id,
+            confId=conf_id,
         )
 
-        energy = self.get_mmff_energy(conf_id=resolved_conf_id, variant=variant)
+        energy = self.get_mmff_energy(conf_id=conf_id, variant=variant)
         self.n_optimized += 1
 
         return energy, status == 0
@@ -1196,20 +1190,20 @@ class DeepMolecule:
         """
         Optimize a conformer with the Universal Force Field.
         """
-        resolved_conf_id = self._resolve_conf_id(conf_id)
+        conf_id = self.mol.GetConformer(conf_id).GetId()
 
         if not UFFHasAllMoleculeParams(self.mol):
             raise ValueError(f"UFF parameters are unavailable for < {self.smiles!r} >.")
 
-        self._clear_conformer_results(resolved_conf_id)
+        self._clear_conformer_results(conf_id)
 
         status = UFFOptimizeMolecule(
             self.mol,
             maxIters=max_iterations,
-            confId=resolved_conf_id,
+            confId=conf_id,
         )
 
-        energy = self.get_uff_energy(conf_id=resolved_conf_id)
+        energy = self.get_uff_energy(conf_id=conf_id)
         self.n_optimized += 1
 
         return energy, status == 0
@@ -1217,33 +1211,33 @@ class DeepMolecule:
     def optimize_xtb(self, conf_id: int = -1, charge: Optional[int] = None, uhf: Optional[int] = None,
                      method: str = "GFN2-xTB", max_steps: int = 256, fmax: float = 0.01) -> tuple[float, bool]:
         """
-        Optimize a conformer with xTB GFN2-xTB through ASE.
+        Optimize a conformer with GFN2-xTB through ASE.
         """
         try:
             from ase.optimize import BFGS
         except ImportError as exc:
             raise ImportError("xTB optimization requires ASE and xtb-python.") from exc
 
-        resolved_conf_id = self._resolve_conf_id(conf_id)
+        conf_id = self.mol.GetConformer(conf_id).GetId()
         atoms, charge, uhf = self._get_xtb_atoms(
-            conf_id=resolved_conf_id,
+            conf_id=conf_id,
             charge=charge,
             uhf=uhf,
             method=method,
         )
 
-        self._clear_conformer_results(resolved_conf_id)
+        self._clear_conformer_results(conf_id)
 
         optimizer = BFGS(atoms, logfile=None)
         converged = bool(optimizer.run(fmax=fmax, steps=max_steps))
 
         self._update_conformer_positions(
-            conf_id=resolved_conf_id,
+            conf_id=conf_id,
             positions=atoms.get_positions(),
         )
 
         energy = self.get_xtb_energy(
-            conf_id=resolved_conf_id,
+            conf_id=conf_id,
             charge=charge,
             uhf=uhf,
             method=method,
@@ -1268,13 +1262,15 @@ class DeepMolecule:
                 conf_id=conf_id,
                 max_iterations=max_iterations,
             )
-        else:
+        elif method == "GFN2-xTB":
             energy, converged = self.optimize_xtb(
                 conf_id=conf_id,
                 charge=charge,
                 uhf=uhf,
                 max_steps=max_iterations,
             )
+        else:
+            raise ValueError(f"Unknown optimization method: {method!r}. Allowed are: {str(OptimizationMethod)}")
 
         return energy, method, converged
 
@@ -1282,12 +1278,12 @@ class DeepMolecule:
         """
         Calculate and store the current MMFF conformer energy.
         """
-        resolved_conf_id = self._resolve_conf_id(conf_id)
+        conf_id = self.mol.GetConformer(conf_id).GetId()
         properties = MMFFGetMoleculeProperties(self.mol, mmffVariant=variant)
         force_field = MMFFGetMoleculeForceField(
             self.mol,
             properties,
-            confId=resolved_conf_id,
+            confId=conf_id,
         )
 
         if force_field is None:
@@ -1296,15 +1292,15 @@ class DeepMolecule:
         return self._store_energy(
             energy=force_field.CalcEnergy(),
             method=variant,
-            conf_id=resolved_conf_id,
+            conf_id=conf_id,
         )
 
     def get_uff_energy(self, conf_id: int = -1) -> float:
         """
         Calculate and store the current UFF conformer energy.
         """
-        resolved_conf_id = self._resolve_conf_id(conf_id)
-        force_field = UFFGetMoleculeForceField(self.mol, confId=resolved_conf_id)
+        conf_id = self.mol.GetConformer(conf_id).GetId()
+        force_field = UFFGetMoleculeForceField(self.mol, confId=conf_id)
 
         if force_field is None:
             raise RuntimeError(f"RDKit could not construct UFF for < {self.smiles!r} >.")
@@ -1312,7 +1308,7 @@ class DeepMolecule:
         return self._store_energy(
             energy=force_field.CalcEnergy(),
             method="UFF",
-            conf_id=resolved_conf_id,
+            conf_id=conf_id,
         )
 
     def get_xtb_energy(self, conf_id: int = -1, charge: Optional[int] = None, uhf: Optional[int] = None,
@@ -1320,9 +1316,9 @@ class DeepMolecule:
         """
         Calculate and store a GFN2-xTB single-point energy and descriptors.
         """
-        resolved_conf_id = self._resolve_conf_id(conf_id)
+        conf_id = self.mol.GetConformer(conf_id).GetId()
         atoms, charge, uhf = self._get_xtb_atoms(
-            conf_id=resolved_conf_id,
+            conf_id=conf_id,
             charge=charge,
             uhf=uhf,
             method=method,
@@ -1341,14 +1337,14 @@ class DeepMolecule:
         self.uhf = uhf
         self._store_charges(
             charges=charges,
-            method="XTB-GFN2",
-            conf_id=resolved_conf_id,
+            method="GFN2-xTB",
+            conf_id=conf_id,
         )
 
         return self._store_energy(
             energy=energy,
-            method="XTB-GFN2",
-            conf_id=resolved_conf_id,
+            method="GFN2-xTB",
+            conf_id=conf_id,
             charge=charge,
             uhf=uhf,
             **descriptors,
@@ -1361,8 +1357,14 @@ class DeepMolecule:
         if method in ("MMFF94", "MMFF94s"):
             return self.get_mmff_energy(conf_id=conf_id, variant=method)
 
-        if method == "UFF":
+        elif method == "UFF":
             return self.get_uff_energy(conf_id=conf_id)
+        
+        elif method == "GFN2-xTB":
+            return self.get_xtb_energy(conf_id=conf_id)
+        
+        else:
+            raise ValueError(f"Unknown method: {method!r}. Allowed are: {OptimizationMethod}")
 
         return self.get_xtb_energy(conf_id=conf_id)
 
@@ -1372,7 +1374,7 @@ class DeepMolecule:
         """
         self._prepare_for_charge_calculation()
 
-        cached = self._get_cached_charges(method="GASTEIGER", conf_id=None)
+        cached = self._get_cached_charges(method="Gasteiger", conf_id=None)
         if cached is not None:
             return cached
 
@@ -1382,10 +1384,10 @@ class DeepMolecule:
                 float(atom.GetProp("_GasteigerCharge"))
                 for atom in self.mol.GetAtoms()
             ],
-            dtype=np.float32,
+            dtype=np.float32
         )
 
-        return self._store_charges(charges=charges, method="GASTEIGER")
+        return self._store_charges(charges=charges, method="Gasteiger")
 
     def get_mmff_charges(self, variant: MMFFVariant = "MMFF94s") -> npt.NDArray[np.float32]:
         """
@@ -1417,22 +1419,22 @@ class DeepMolecule:
         """
         Calculate GFN2-xTB Mulliken partial charges for one conformer.
         """
-        resolved_conf_id = self._resolve_conf_id(conf_id)
+        conf_id = self.mol.GetConformer(conf_id).GetId()
 
-        cached = self._get_cached_charges(method="XTB-GFN2", conf_id=resolved_conf_id)
+        cached = self._get_cached_charges(method="GFN2-xTB", conf_id=conf_id)
         if cached is not None:
             return cached
 
         self.get_xtb_energy(
-            conf_id=resolved_conf_id,
+            conf_id=conf_id,
             charge=charge,
             uhf=uhf,
             method=method,
         )
 
-        return self._get_cached_charges(method="XTB-GFN2", conf_id=resolved_conf_id)
+        return self._get_cached_charges(method="GFN2-xTB", conf_id=conf_id)
 
-    def get_charges(self, method: ChargeMethod = "GASTEIGER", conf_id: int = -1, heavy_only: bool = True,
+    def get_charges(self, method: ChargeMethod = "Gasteiger", conf_id: int = -1, heavy_only: bool = True,
                     combine_hydrogens: bool = False) -> npt.NDArray[np.float32]:
         """
         Return partial charges.
@@ -1440,7 +1442,7 @@ class DeepMolecule:
         Parameters
         ----------
         method
-            "GASTEIGER", "MMFF94", "MMFF94s", or "XTB-GFN2".
+            "Gasteiger", "MMFF94", "MMFF94s", or "GFN2-xTB".
         conf_id
             Conformer ID used for conformer-dependent xTB charges.
         heavy_only
@@ -1449,12 +1451,14 @@ class DeepMolecule:
             Return heavy-atom charges after adding each directly bonded
             hydrogen charge to its respective heavy atom.
         """
-        if method == "GASTEIGER":
+        if method == "Gasteiger":
             charges = self.get_gasteiger_charges()
         elif method in ("MMFF94", "MMFF94s"):
             charges = self.get_mmff_charges(variant=method)
-        else:
+        elif method == "GFN2-xTB":
             charges = self.get_xtb_charges(conf_id=conf_id)
+        else:
+            raise ValueError(f"Unknown method: {method!r}. Allowed are: {OptimizationMethod}")
 
         if combine_hydrogens:
             combined_charges = []
@@ -1479,11 +1483,11 @@ class DeepMolecule:
         """
         Return stored descriptors for a completed conformer calculation.
         """
-        resolved_conf_id = self._resolve_conf_id(conf_id)
-        key = (resolved_conf_id, method)
+        conf_id = self._resolve_conf_id(conf_id)
+        key = (conf_id, method)
 
         if key not in self._descriptors:
-            self.get_energy(method=method, conf_id=resolved_conf_id)
+            self.get_energy(method=method, conf_id=conf_id)
 
         descriptors = self._descriptors[key]
 
