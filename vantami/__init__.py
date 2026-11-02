@@ -2,7 +2,7 @@ from vantami import api
 from vantami import chemistry
 from vantami import cli
 from vantami import data
-from vantami import deep
+from vantami import dl
 from vantami import io
 from vantami import metrics
 from vantami import nlp
