@@ -9,8 +9,9 @@ import numpy.typing as npt
 
 try:
     from rdkit import Chem, RDLogger
+    import torch
     from torch_geometric.data import Data as Graph
-    from vantami.chemistry.molecule import DeepMolecule
+    from vantami.chem.molecule import DeepMolecule
 except ImportError as exc:
     raise ImportError(f"GraphVectorizer requires rdkit, torch, and torch_geometric:\n{exc} ")
 
@@ -109,7 +110,7 @@ class GraphVectorizer:
     def encode_bond(self, bond: Chem.rdchem.Bond, atom_indices: Optional[dict[int, int]] = None,
                     distance: float = 0.0) -> Tuple[list[list[int]], np.ndarray]:
         """
-        Encode one bond, its interatomic distance, and geometry availability.
+        Encode one bond and its interatomic distance.
         """
         start_idx = bond.GetBeginAtomIdx()
         end_idx = bond.GetEndAtomIdx()
@@ -173,7 +174,7 @@ class GraphVectorizer:
 
         return (np.asarray(edges, dtype=np.int64).T, np.vstack(encoding).astype(np.float32))
 
-    def from_smiles(self, smiles: str) -> Graph:
+    def from_smiles(self, smiles: str, heavy_only: bool = True) -> Graph:
         """
         Build one graph from a SMILES string.
 
@@ -182,7 +183,7 @@ class GraphVectorizer:
         mol = Chem.MolFromSmiles(smiles, sanitize=True)
 
         atoms_encoding_array = self.encode_mol_atoms(mol)
-        edges_array, bonds_encoding_array = self.encode_mol_bonds(mol)
+        edges_array, bonds_encoding_array = self.encode_mol_bonds(mol, heavy_only=heavy_only)
 
         graph_data = {
             "x": torch.from_numpy(atoms_encoding_array),
@@ -192,7 +193,7 @@ class GraphVectorizer:
 
         return Graph(**graph_data)
 
-    def from_deepmol(self, deepmol: vantami.chemistry.molecule.DeepMolecule, charge_method: str = "GASTEIGER",
+    def from_deepmol(self, deepmol: vantami.chem.molecule.DeepMolecule, charge_method: str = "Gasteiger",
                      energy_method: Optional[str] = None, heavy_only: bool = True, combine_hydrogens: bool = False) -> Graph:
         """
         Build a heavy-atom graph from a prepared DeepMolecule.
@@ -236,7 +237,7 @@ class GraphVectorizer:
         Vectorize one DeepMolecule or an iterable of DeepMolecules.
         """
         try:
-            from vantami.chemistry.molecule import DeepMolecule
+            from vantami.chem.molecule import DeepMolecule
         except ImportError as exc:
             raise ImportError(f"Method < encode_deepmol > requires < vantami > 0.5.2 or higher.")
         if isinstance(deepmol, DeepMolecule):
