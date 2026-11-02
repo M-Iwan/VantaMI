@@ -66,7 +66,7 @@ class DeepMoleculeManager:
         self.mol_ids: dict[str, MolID] = {}
         self.failed_smiles: dict[str, str] = {}
         self.errors: dict[str, dict[str, str]] = {}
-        self.search_results: dict[str, dict[str, Any]] = {}
+        self.conformer_results: dict[str, dict[str, Any]] = {}
 
         self.conformer_defaults = self.DEFAULT_CONFORMER_OPTIONS.copy()
         if conformer_defaults:
@@ -143,7 +143,7 @@ class DeepMoleculeManager:
         self.mol_ids[smiles] = mol_id
         self.failed_smiles.pop(smiles, None)
         self.errors.pop(smiles, None)
-        self.search_results.pop(smiles, None)
+        self.conformer_results.pop(smiles, None)
         return True
 
     def add_many(self, records: Iterable[MoleculeInput]) -> dict[str, int]:
@@ -167,6 +167,15 @@ class DeepMoleculeManager:
             return self.molecules[smiles]
         except KeyError as exc:
             raise KeyError(f"No valid molecule registered for SMILES: {smiles!r}") from exc
+
+    def get_valid_conformers(self):
+        """
+        Retrieve all DeepMolecules with exit status == "success"
+        """
+        if not self.conformer_results:
+            raise ValueError(f"No conformer search has been performed yet")
+
+        return [self.get(smi) for smi, res in self.conformer_results.items() is res["status"] == "success"]
 
     def is_valid(self, smiles: str) -> bool:
         """
@@ -193,7 +202,7 @@ class DeepMoleculeManager:
         options = self._search_options(overrides)
         _, _, updated_molecule, result = _run_conformer_search(self.mol_ids[smiles], smiles, molecule, options)
         self.molecules[smiles] = updated_molecule
-        self.search_results[smiles] = result
+        self.conformer_results[smiles] = result
 
         if result["status"] == "failed":
             self._record_error(smiles, "conformer_search", result["error"])
@@ -205,7 +214,8 @@ class DeepMoleculeManager:
 
     def search_conformers_many(self, smiles: Optional[Sequence[str]] = None, *, n_jobs: int = 1,
                                batch_size: int | str = "auto", **overrides: Any) -> None:
-        """Run independent conformer searches and update < .search_results >.
+        """
+        Run independent conformer searches and update < .conformer_results >.
         """
         options = self._search_options(overrides)
         requested_smiles = list(self.molecules if smiles is None else smiles)
@@ -224,7 +234,7 @@ class DeepMoleculeManager:
         with tqdm(completed, total=len(requested_smiles), desc="Conformer search", unit="molecule") as progress:
             for _, item, molecule, result in progress:
                 self.molecules[item] = molecule
-                self.search_results[item] = result
+                self.conformer_results[item] = result
                 if result["status"] == "failed":
                     self._record_error(item, "conformer_search", result["error"])
                 else:
@@ -232,11 +242,12 @@ class DeepMoleculeManager:
                     if not self.errors.get(item):
                         self.errors.pop(item, None)
 
+
     def summary(self) -> dict[str, int]:
         """
         Return basic collection and conformer-search status counts.
         """
-        statuses = [result["status"] for result in self.search_results.values()]
+        statuses = [result["status"] for result in self.conformer_results.values()]
         return {
             "valid": len(self.molecules),
             "invalid": len(self.failed_smiles),
@@ -270,7 +281,7 @@ class DeepMoleculeManager:
         """
         rows: list[dict[str, Any]] = []
         for smiles in self.molecules:
-            result = self.search_results.get(smiles, {})
+            result = self.conformer_results.get(smiles, {})
             rows.append({
                 "mol_id": self.mol_ids[smiles],
                 "smiles": smiles,
