@@ -173,8 +173,10 @@ def write_pd(df: pd.DataFrame, path: Union[str, Path], kwargs: Optional[Dict] = 
         path = Path(path)
 
     ext, compression = _get_extensions(path)
-
     _validate_compression(ext, compression)
+
+    if not os.path.isdir(path.parent):
+        path.parent.mkdir(parents=True, exist_ok=True)
 
     if df.empty:
         warnings.warn(f"Saving an empty DataFrame with columns: {df.columns}")
@@ -280,8 +282,10 @@ def write_pl(df: pl.DataFrame, path: Union[str, Path], kwargs: Optional[Dict] = 
         path = Path(path)
 
     ext, compression = _get_extensions(path)
-
     _validate_compression(ext, compression)
+
+    if not os.path.isdir(path.parent):
+        path.parent.mkdir(parents=True, exist_ok=True)
 
     if df.is_empty():
         warnings.warn(f"Saving an empty DataFrame with columns: {df.columns}")
