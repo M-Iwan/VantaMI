@@ -286,10 +286,17 @@ def minimal_train_test_split(df: pl.DataFrame, fraction: float, tolerance: float
         return None, None
 
     df = df.with_columns(
-        pl.when(pl.col(cluster_col).is_in(clusters)).then(pl.lit("Test")).otherwise(pl.lit("Train")).alias("Set")
+        pl.when(
+            pl.col(cluster_col).is_in(clusters)
+        ).then(
+            pl.lit("Test")
+        ).otherwise(
+            pl.lit("Train")
+        ).alias("Set")
     )
 
-    return df
+    train_df, test_df = df.filter(pl.col("Set") == "Train"), df.filter(pl.col("Set") == "Test")
+    return train_df, test_df
 
 
 def random_kfold_split(df: pl.DataFrame, n_folds: int = 5, seed: int = 42):
@@ -503,7 +510,6 @@ def murcko_kfold_split(df: pl.DataFrame, strat_col: Union[str, List[str]] = None
 def butina_kfold_split(df: pl.DataFrame, strat_col: Union[str, List[str]] = None, smiles_col: str = 'SMILES',
                        fp_col: str = 'Morgan', threshold: float = 0.4, batch_size: int = 512, n_folds: int = 5,
                        n_jobs: int = 1, tolerance: float = 0.3):
-
     """
     Splits a DataFrame into folds based on Butina clustering.
 
