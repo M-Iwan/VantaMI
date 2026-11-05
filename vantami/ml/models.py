@@ -345,6 +345,7 @@ class ClassifierUnit(Unit):
     Email: mateusz.iwan@hotmail.com
     Added in VantaMI version: 0.1.2
     """
+
     def __init__(self, model, transformer: Optional[TransformerType] = None, use_proba: bool = True):
         """
         Initialize a classification unit with a model and preprocessing transformers.
@@ -464,10 +465,9 @@ class ClassifierUnit(Unit):
             values.update({
                 "ROC AUC": rts(roc_auc_score(y_true, y_score, sample_weight=sample_weight), 5),
                 'PRC AUC': rts(average_precision_score(y_true=y_true, y_score=y_score, sample_weight=sample_weight), 5),
-                'Brier': rts(brier_score_loss(y_true=y_true, y_score=y_score, sample_weight=sample_weight), 5),
+                'Brier': rts(brier_score_loss(y_true=y_true, y_proba=y_score, sample_weight=sample_weight), 5),
                 'ECE': rts(ece_score(y_true=y_true, y_score=y_score, sample_weight=sample_weight), 5)
             })
-
 
         df = pl.DataFrame(values).unpivot(variable_name='Metric', value_name='Value')
         return df

@@ -28,16 +28,11 @@ if args.n_jobs < 1:
     parser.error("--n-jobs must be greater than zero.")
 if args.batch_size < 1:
     parser.error("--batch-size must be greater than zero.")
-if args.prune_threshold < 0:
-    parser.error("--prune-threshold must be non-negative.")
-if args.max_iterations < 1:
-    parser.error("--max-iterations must be greater than zero.")
 
 def main(args) -> None:
     """
     Run conformer generation and save the molecule manager.
     """
-
     df = read_pl(args.data_path)
 
     if args.smiles_col not in df.columns:
@@ -51,9 +46,9 @@ def main(args) -> None:
     conformer_settings = {
         "n_conformers": args.n_conformers,
         "method": args.energy_method,
-        "seed": args.seed,
-        "prune_threshold": args.prune_threshold,
-        "max_iterations": args.max_iterations,
+        "seed": 42,
+        "prune_threshold": 0.25,
+        "max_iterations": 1024,
         "charge": None,
         "uhf": None,
     }
@@ -78,4 +73,4 @@ def main(args) -> None:
     print(f"\nSaved manager to: {args.save_path}")
 
 if __name__ == "__main__":
-    main()
+    main(args)

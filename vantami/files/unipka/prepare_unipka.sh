@@ -152,7 +152,7 @@ echo "CPU jobs:   ${N_JOBS}"
 echo "Batch size: ${BATCH_SIZE}"
 
 docker run -i \
-    --name "microstate_enumeration" \
+    --name "microstate_enumeration-${RUN_TOKEN}" \
     -v "${INPUT_DIR}:/work/input:ro" \
     -v "${STAGING_DIR}:/work/prepared" \
     --cpus="${N_JOBS}" \
