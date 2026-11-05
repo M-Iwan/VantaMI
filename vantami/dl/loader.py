@@ -1,11 +1,14 @@
 import warnings
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Union
 
 import torch
 from torch.utils.data import DataLoader
 from torch_geometric.data import Batch as GeometricBatch
 
-from vantami.deep.dataset import MMDataset, MMBatch
+from vantami.dl.dataset import MMDataset, PolarsMMDataset, ZarrMMDataset, MMBatch
+
+
+MMDataset_Type = Union[MMDataset, PolarsMMDataset, ZarrMMDataset]
 
 
 class MMLoader:
@@ -15,32 +18,24 @@ class MMLoader:
 
     Parameters
     ----------
-    dataset : MMDataset
+    dataset : MMDataset_Type
         Source dataset.
     batch_size : int, optional
         Batch size. Default is 32.
     shuffle : bool, optional
-        Whether to shuffle indices each epoch. Default is False.
+        Whether to shuffle indices each epoch. Default is True.
     num_workers : int, optional
-        Worker processes for the DataLoader. Default is 0.
+        Worker processes for the DataLoader. Default is 1.
     pin_memory : bool, optional
-        Passed through to DataLoader. Default is False.
+        Passed through to DataLoader. Default is True.
     drop_last : bool, optional
         Whether to drop the last incomplete batch. Default is False.
     **kwargs
         Any other keyword arguments forwarded to torch.utils.data.DataLoader.
     """
 
-    def __init__(
-            self,
-            dataset: MMDataset,
-            batch_size: int = 32,
-            shuffle: bool = False,
-            num_workers: int = 0,
-            pin_memory: bool = False,
-            drop_last: bool = False,
-            **kwargs
-    ):
+    def __init__(self, dataset: MMDataset_Type, batch_size: int = 128, shuffle: bool = True, num_workers: int = 1,
+                 pin_memory: bool = True, drop_last: bool = False, **kwargs):
         self.dataset = dataset
         self.batch_size = batch_size
         self.config = dataset.config
@@ -63,12 +58,12 @@ class MMLoader:
 
         Parameters
         ----------
-        batch : list of dict
+        batch: List[Dict[str, Any]]
             Output of MMDataset.__getitem__ for each index in the batch.
 
         Returns
         -------
-        out : MMBatch
+        out: MMBatch
             Collated tensors and structures; empty dict yields empty MMBatch.
         """
         if not batch:
@@ -82,7 +77,7 @@ class MMLoader:
 
             values = [sample[col_name] for sample in batch]
 
-            if modality == 'string':
+            if modality == "string":
                 tokens_list = [tokens for tokens, length in values]
                 lengths_list = [length for tokens, length in values]
 
@@ -92,24 +87,23 @@ class MMLoader:
 
                 collated_data[col_name] = (stacked_tokens, lengths_tensor, attention_mask)
 
-            elif modality == 'graph':
+            elif modality == "graph":
                 collated_data[col_name] = self._collate_graphs(values)
 
-            elif modality == 'target':
-                collated_data['y_true'] = torch.stack(values, dim=0)
+            elif modality == "target":
+                collated_data["y_true"] = torch.stack(values, dim=0)
 
-            elif modality in {'descriptor', 'image'}:
+            elif modality in {"descriptor", "image"}:
                 collated_data[col_name] = torch.stack(values, dim=0)
 
-            elif modality == 'sample_weight':
-                collated_data['y_wgts'] = torch.stack(values, dim=0)
+            elif modality == "sample_weight":
+                collated_data["y_wgts"] = torch.stack(values, dim=0)
 
-            elif modality == 'group':
-                collated_data['group'] = values
+            elif modality == "group":
+                collated_data["group"] = values
 
-        if 'y_true' in collated_data and 'y_wgts' not in collated_data:
-            yt = collated_data['y_true']
-            collated_data['y_wgts'] = torch.ones_like(yt, dtype=torch.float32)
+        if "y_true" in collated_data and "y_wgts" not in collated_data:
+            collated_data["y_wgts"] = torch.ones_like(collated_data["y_true"], dtype=torch.float32)
 
         return MMBatch(collated_data, self.config)
 
@@ -120,14 +114,14 @@ class MMLoader:
 
         Parameters
         ----------
-        tokens_list : list of Tensor
+        tokens_list: List[torch.Tensor]
             One 1D int tensor per row (variable length).
-        lengths_list : list of int
+        lengths_list : List[int]
             True length of each sequence (before padding).
 
         Returns
         -------
-        mask : Tensor
+        mask: torch.Tensor
             dtype bool, shape (batch_size, max_len).
         """
         batch_size = len(tokens_list)
@@ -147,14 +141,13 @@ class MMLoader:
 
         Parameters
         ----------
-        graphs : list
+        graphs: List
             PyG Data instances.
 
         Returns
         -------
         batched : Batch or list
-            Batch.from_data_list(graphs) on success; on failure, the original list
-            and a warning.
+            Batch.from_data_list(graphs) on success; on failure, the original list and a warning.
         """
         try:
             return GeometricBatch.from_data_list(graphs)
