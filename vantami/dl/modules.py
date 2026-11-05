@@ -116,6 +116,19 @@ def build_graph_layers(gnn_params):
             nn_layer = nn.Linear(in_dim * 2, out_dim)
             next_in = out_dim
             graph_layer = layer_class(nn_layer, **args)
+        elif layer_type == "gine":
+            edge_dim = gnn_params["edge_dim"]
+            gine_mlp = nn.Sequential(
+                nn.Linear(in_dim, out_dim),
+                nn.ReLU(),
+                nn.Linear(out_dim, out_dim)
+            )
+            next_in = out_dim
+            graph_layer = layer_class(
+                nn=gine_mlp,
+                edge_dim=edge_dim,
+                **args
+            )
         else:
             raise ValueError(f"Unsupported layer_type: {layer_type}")
 
@@ -146,18 +159,19 @@ def build_gnn_config():
         Graph-network configuration compatible with :func:`build_graph_layers`.
     """
     try:
-        from torch_geometric.nn import GCNConv, SAGEConv, GATConv, GATv2Conv, EdgeConv
+        from torch_geometric.nn import GCNConv, SAGEConv, GATConv, GATv2Conv, EdgeConv, GINEConv
     except ImportError as exc:
         raise ImportError(f"< build_gnn_config > requires < pytorch_geometric > library") from exc
 
-    layer_types = ["convolutional", "attention", "edge"]
+    layer_types = ["convolutional", "attention", "edge", "gine"]
     available_activations = ["relu", "leaky_relu", "gelu", "tanh"]
 
     def suggest_gnn_layers():
         return {
             "convolutional": [GCNConv, SAGEConv],
             "attention": [GATConv, GATv2Conv],
-            "edge": [EdgeConv]
+            "edge": [EdgeConv],
+            "gine": [GINEConv]
         }
 
     print("=== GNN Layer Configuration ===")
@@ -192,8 +206,10 @@ def build_gnn_config():
 
     if layer_type == "attention":
         heads = int(input("Enter number of attention heads [1]: ") or 1)
-        edge_dim = int(input("Enter edge feature dimension (edge_dim): "))
         assert heads >= 1
+
+    if layer_type in {"attention", "gine"}:
+        edge_dim = int(input("Enter edge feature dimension (edge_dim): "))
         assert edge_dim > 0
 
     if input("Do you want to enter custom args for each layer? (y/n): ").strip().lower() == "y":
@@ -247,6 +263,9 @@ def build_gnn_config():
 
     if layer_type == "attention":
         gnn_params["heads"] = heads
+
+    if layer_type in {"attention", "gine"}:
+        gnn_params["edge_dim"] = edge_dim
 
     return gnn_params
 
@@ -721,13 +740,13 @@ def build_rnn_config():
     }
 
 
-def build_hidden_layers(sizes: List[int], batch_norm: bool = True,
+def build_linear_layers(sizes: List[int], batch_norm: bool = True,
                         activation: Optional[str] = "relu", dropout: float = 0.0):
     """
     Build a fully connected network from successive feature dimensions.
 
     Each linear layer is Xavier-normal initialized and followed, when enabled,
-    by batch normalization, an activation, and dropout.
+    by batch normalization, an activation, and dropout, except for the last layer.
 
     Parameters
     ----------
@@ -760,7 +779,7 @@ def build_hidden_layers(sizes: List[int], batch_norm: bool = True,
     lin_out_size = linear_sizes[-1]
     in_features = linear_sizes.pop(0)
 
-    for out_features in linear_sizes:
+    for out_features in linear_sizes[:-1]:
         linear = nn.Linear(in_features, out_features)
         init_linear(linear)
         linear_layers.append(linear)
@@ -774,10 +793,12 @@ def build_hidden_layers(sizes: List[int], batch_norm: bool = True,
 
         in_features = out_features
 
+    linear_layers.append(nn.Linear(in_features, lin_out_size))
+
     return nn.Sequential(*linear_layers), lin_out_size
 
 
-def build_hidden_config():
+def build_linear_config():
     """
     Interactively collect a fully connected network configuration.
 
