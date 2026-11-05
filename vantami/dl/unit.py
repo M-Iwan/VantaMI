@@ -1,5 +1,6 @@
 import os
 import inspect
+import datetime
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from copy import deepcopy
@@ -8,15 +9,22 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import numpy.typing as npt
+
+from sklearn.metrics import (confusion_matrix, roc_auc_score, r2_score, mean_absolute_error, root_mean_squared_error,
+                             average_precision_score, brier_score_loss)
+
 import torch
 from torch import Tensor, nn
+
+from vantami.ml.score import ece_score
+from vantami.stats.utils import round_to_significant as rts
 
 
 LossSummary = Dict[str, Any]
 LossValue = Tuple[Tensor, Tensor]
 
 
-class MMTUnit(nn.Module, ABC):
+class MMUnit(nn.Module, ABC):
     """
     Abstract base class for multitask deep-learning models.
 
@@ -33,12 +41,13 @@ class MMTUnit(nn.Module, ABC):
     model_name: str, default="Unit"
         Model identifier used in checkpoint filenames.
     max_grad_norm: float, optional
-        Maximum gradient norm used for gradient clipping. Gradient clipping is
-        disabled when this is `None`.
+        Maximum gradient norm used for gradient clipping. Gradient clipping is disabled when this is `None`.
+    verbose: int, optional
+        Set verbosity level. 0 = no logs, 1 = standard progress, 2 = debugging
     """
 
     def __init__(self, device: str = "cpu", num_task: int = 1, model_name: str = "Unit",
-                 max_grad_norm: Optional[float] = None) -> None:
+                 max_grad_norm: Optional[float] = None, verbose: int = 1) -> None:
         super().__init__()
 
         self.device = device
@@ -46,6 +55,7 @@ class MMTUnit(nn.Module, ABC):
         self.name = model_name
         self.model_name = model_name
         self.max_grad_norm = max_grad_norm
+        self.verbose = verbose
 
         self.loss_fn: Optional[nn.Module] = None
         self.optimizer: Optional[torch.optim.Optimizer] = None
@@ -56,6 +66,11 @@ class MMTUnit(nn.Module, ABC):
         self.best_state_dict: Optional[Dict[str, Tensor]] = None
         self.best_epoch: Optional[int] = None
         self.hyperparameters: Dict[str, Any] = {}
+
+    def log(self, message: str, level: int = 1):
+        if self.verbose >= level:
+            log_time = str(datetime.datetime.now()).split(".")[0]
+            print(f"{log_time}: {message}")
 
     @abstractmethod
     def forward(self, batch_data: dict) -> Tensor:
@@ -75,7 +90,7 @@ class MMTUnit(nn.Module, ABC):
 
     @staticmethod
     @abstractmethod
-    def score(y_true: npt.NDarray, y_pred: npt.NDarray, y_wgts: npt.NDarray) -> Dict[str, float]:
+    def score(y_true: npt.NDArray, y_pred: npt.NDArray, y_wgts: npt.NDArray) -> Dict[str, float]:
         """
         Calculate task-specific metrics from target, prediction, and weight arrays.
 
@@ -177,12 +192,20 @@ class MMTUnit(nn.Module, ABC):
         epoch_data = {"y_pred": [], "y_true": [], "y_wgts": []}
         gradient_norms = []
 
-        for batch_data in dataloader:
+        for batch_index, batch_data in enumerate(dataloader, start=1):
+            self.log(f"Iterating over batch: {batch_index}", level=2)
             self.optimizer.zero_grad()
 
             y_pred = self(batch_data)
             y_true = batch_data["y_true"].to(self.device)
             y_wgts = batch_data["y_wgts"].to(self.device)
+
+            self.log(f"Training batch {batch_index}: y_pred shape={y_pred.shape}, "
+                     f"y_true shape={y_true.shape}, y_wgts shape={y_wgts.shape}.", level=2)
+
+            if any([y_pred.shape == 0, y_true.shape==0, y_wgts.shape==0]):
+                self.log(f"Zero size batch encountered", level=1)
+                continue
 
             epoch_data["y_pred"].append(y_pred)
             epoch_data["y_true"].append(y_true)
@@ -198,7 +221,11 @@ class MMTUnit(nn.Module, ABC):
             total_loss, total_weight = batch_loss["Total"]
             total_loss.backward()
 
-            gradient_norms.append(self.grad_norm() / (total_weight.item() + 1e-6))
+            batch_gradient_norm = self.grad_norm() / (total_weight.item() + 1e-6)
+            gradient_norms.append(batch_gradient_norm)
+
+            self.log(f"Training batch {batch_index}: loss sum={total_loss.item():.5f}, "
+                     f"weight sum={total_weight.item():.5f}, gradient norm={batch_gradient_norm:.5f}.", level=2)
 
             if self.max_grad_norm is not None:
                 torch.nn.utils.clip_grad_norm_(
@@ -211,6 +238,7 @@ class MMTUnit(nn.Module, ABC):
 
         if self.scheduler is not None:
             self.scheduler.step()
+            self.log("Learning-rate scheduler step completed.", level=2)
 
         epoch_loss, epoch_metrics = self._summarise_epoch(batch_losses, epoch_data)
         return epoch_loss, epoch_metrics, gradient_norms
@@ -225,39 +253,50 @@ class MMTUnit(nn.Module, ABC):
         epoch_data = {"y_pred": [], "y_true": [], "y_wgts": []}
 
         with torch.no_grad():
-            for batch_data in dataloader:
+            for batch_index, batch_data in enumerate(dataloader, start=1):
                 y_pred = self(batch_data)
                 y_true = batch_data["y_true"].to(self.device)
                 y_wgts = batch_data["y_wgts"].to(self.device)
+
+                self.log(f"Evaluation batch {batch_index}: y_pred shape={y_pred.shape}, "
+                         f"y_true shape={y_true.shape}, y_wgts shape={y_wgts.shape}.", level=2)
 
                 epoch_data["y_pred"].append(y_pred)
                 epoch_data["y_true"].append(y_true)
                 epoch_data["y_wgts"].append(y_wgts)
 
-                batch_losses.append(
-                    self.loss(
-                        y_pred=y_pred,
-                        y_true=y_true,
-                        y_wgts=y_wgts,
-                        group=self._get_batch_group(batch_data),
-                    )
+                batch_loss = self.loss(
+                    y_pred=y_pred,
+                    y_true=y_true,
+                    y_wgts=y_wgts,
+                    group=self._get_batch_group(batch_data),
                 )
+
+                total_loss, total_weight = batch_loss["Total"]
+                self.log(f"Evaluation batch {batch_index}: loss sum={total_loss.item():.5f}, "
+                         f"weight sum={total_weight.item():.5f}.", level=2)
+
+                batch_losses.append(batch_loss)
 
         return self._summarise_epoch(batch_losses, epoch_data)
 
     def fit(self, dataloader: Iterable[dict], n_epochs: int = 4, early_stop: Optional[int] = 8,
-            save_freq: Optional[int] = 8, save_dir: Optional[str] = None, verbose: int = 0):
+            save_freq: Optional[int] = 8, save_dir: Optional[str] = None):
         """
         Train the model using training loss for early stopping.
         """
         if self.loss_fn is None or self.optimizer is None:
             raise ValueError("Set the loss function and optimizer before fitting the model.")
 
+        self.log(f"Starting training for up to {n_epochs} epoch(s).", level=1)
+
         best_loss = float("inf")
         patience = deepcopy(early_stop) if early_stop is not None else None
 
         for epoch_number in range(1, n_epochs + 1):
-            train_loss, train_metrics, train_grad_norms = self.fit_epoch(dataloader)
+            self.log(f"Starting training epoch {epoch_number}/{n_epochs}.", level=1)
+
+            train_loss, train_metrics, train_grad_norms = self.fit_epoch(dataloader, )
 
             self.logs["train_loss"].append((epoch_number, train_loss))
             self.logs["train_metrics"].append((epoch_number, train_metrics))
@@ -265,8 +304,7 @@ class MMTUnit(nn.Module, ABC):
 
             current_loss = train_loss["Total"]
 
-            if verbose > 0:
-                print(f"Epoch {epoch_number} train loss: {current_loss:.5f}")
+            self.log(f"Epoch {epoch_number} train loss: {current_loss:.5f}", level=1)
 
             if early_stop is not None:
                 if current_loss < best_loss:
@@ -274,37 +312,49 @@ class MMTUnit(nn.Module, ABC):
                     patience = deepcopy(early_stop)
                     self.set_best_model(epoch_number)
 
+                    self.log(f"Epoch {epoch_number}: new best training loss: {best_loss:.5f}.", level=1)
+
                     if save_dir is not None:
-                        self.save(os.path.join(save_dir, f"{self.model_name}_min.pth"))
+                        save_path = os.path.join(save_dir, f"{self.model_name}_min.pth")
+                        self.save(save_path)
+                        self.log(f"Saved best checkpoint to {save_path}.", level=1)
                 else:
                     patience -= 1
+                    self.log(f"Epoch {epoch_number}: early-stopping patience remaining: {patience}.", level=1)
 
                 if patience == 0:
-                    print(f"Early stopping at epoch {epoch_number} with minimum loss {best_loss:.5f}")
+                    self.log(f"Early stopping at epoch {epoch_number} with minimum loss {best_loss:.5f}", level=1)
                     self.get_best_model()
                     self.epoch = self.best_epoch
                     break
 
             if save_freq is not None and save_dir is not None and epoch_number % save_freq == 0:
-                self.save(os.path.join(save_dir, f"{self.model_name}_{epoch_number}.pth"))
+                save_path = os.path.join(save_dir, f"{self.model_name}_{epoch_number}.pth")
+                self.save(save_path)
+                self.log(f"Saved checkpoint to {save_path}.", level=1)
 
             self.epoch += 1
 
+        self.log("Training completed.", level=1)
+
     def fit_eval(self, train_dataloader: Iterable[dict], eval_dataloader: Iterable[dict], n_epochs: int = 4,
-                 early_stop: Optional[int] = 4, save_freq: Optional[int] = 4, save_dir: Optional[str] = None,
-                 verbose: int = 0):
+                 early_stop: Optional[int] = 4, save_freq: Optional[int] = 4, save_dir: Optional[str] = None):
         """
         Train and evaluate the model, using evaluation loss for early stopping.
         """
         if self.loss_fn is None or self.optimizer is None:
             raise ValueError("Set the loss function and optimizer before fitting the model.")
 
+        self.log(f"Starting training and evaluation for up to {n_epochs} epoch(s).", level=1)
+
         best_loss = float("inf")
         patience = deepcopy(early_stop) if early_stop is not None else None
 
         for epoch_number in range(1, n_epochs + 1):
-            train_loss, train_metrics, train_grad_norms = self.fit_epoch(train_dataloader)
-            eval_loss, eval_metrics = self.eval_epoch(eval_dataloader)
+            self.log(f"Starting training and evaluation epoch {epoch_number}/{n_epochs}.", level=1)
+
+            train_loss, train_metrics, train_grad_norms = self.fit_epoch(train_dataloader, )
+            eval_loss, eval_metrics = self.eval_epoch(eval_dataloader, )
 
             self.logs["train_loss"].append((epoch_number, train_loss))
             self.logs["train_metrics"].append((epoch_number, train_metrics))
@@ -314,9 +364,8 @@ class MMTUnit(nn.Module, ABC):
 
             current_loss = eval_loss["Total"]
 
-            if verbose > 0:
-                print(f"Epoch {epoch_number} train loss: {train_loss['Total']:.5f}")
-                print(f"Epoch {epoch_number} eval loss: {current_loss:.5f}")
+            self.log(f"Epoch {epoch_number} train loss: {train_loss['Total']:.5f}" , level=1)
+            self.log(f"Epoch {epoch_number} eval loss: {current_loss:.5f}", level=1)
 
             if early_stop is not None:
                 if current_loss < best_loss:
@@ -324,23 +373,32 @@ class MMTUnit(nn.Module, ABC):
                     patience = deepcopy(early_stop)
                     self.set_best_model(epoch_number)
 
+                    self.log(f"Epoch {epoch_number}: new best evaluation loss: {best_loss:.5f}.", level=1)
+
                     if save_dir is not None:
-                        self.save(os.path.join(save_dir, f"{self.model_name}_min.pth"))
+                        save_path = os.path.join(save_dir, f"{self.model_name}_min.pth")
+                        self.save(save_path)
+                        self.log(f"Saved best checkpoint to {save_path}.", level=1)
                 else:
                     patience -= 1
+                    self.log(f"Epoch {epoch_number}: early-stopping patience remaining: {patience}.", level=1)
 
                 if patience == 0:
-                    print(f"Early stopping at epoch {epoch_number} with minimum loss {best_loss:.5f}")
+                    self.log(f"Early stopping at epoch {epoch_number} with minimum loss {best_loss:.5f}", level=1)
                     self.get_best_model()
                     self.epoch = self.best_epoch
                     break
 
             if save_freq is not None and save_dir is not None and epoch_number % save_freq == 0:
-                self.save(os.path.join(save_dir, f"{self.model_name}_{epoch_number}.pth"))
+                save_path = os.path.join(save_dir, f"{self.model_name}_{epoch_number}.pth")
+                self.save(save_path)
+                self.log(f"Saved checkpoint to {save_path}.", level=1)
 
             self.epoch += 1
 
-    def predict(self, dataloader: Iterable[dict]) -> npt.NDarray:
+        self.log("Training and evaluation completed.", level=1)
+
+    def predict(self, dataloader: Iterable[dict]) -> npt.NDArray:
         """
         Generate predictions for all batches in a dataloader.
         """
@@ -455,9 +513,7 @@ class MMTUnit(nn.Module, ABC):
 
             for tag in set(accumulated_groups) | set(batch_groups):
                 loss_sum = torch.zeros((), device=total_loss.device, dtype=total_loss.dtype)
-                weight_sum = torch.zeros(
-                    (), device=total_weight.device, dtype=total_weight.dtype
-                )
+                weight_sum = torch.zeros((), device=total_weight.device, dtype=total_weight.dtype)
 
                 if tag in accumulated_groups:
                     loss_sum += accumulated_groups[tag][0]
@@ -481,33 +537,30 @@ class MMTUnit(nn.Module, ABC):
         total_loss, total_weight = weighted_loss["Total"]
         task_loss, task_weight = weighted_loss["Task"]
 
-        normalised_total = (
-            total_loss / total_weight
-            if total_weight.item() > 0.0
+        normalized_total = (
+            total_loss / total_weight if total_weight.item() > 0.0
             else torch.zeros((), device=total_loss.device, dtype=total_loss.dtype)
         )
 
-        normalised_task = torch.where(
+        normalized_task = torch.where(
             task_weight > 0,
             task_loss / task_weight.clamp_min(torch.finfo(task_weight.dtype).eps),
             torch.zeros_like(task_loss),
         )
 
-        normalised_loss: LossSummary = {
-            "Total": round(normalised_total.item(), 5),
-            "Task": np.round(normalised_task.detach().cpu().numpy(), 5),
+        normalized_loss: LossSummary = {
+            "Total": round(normalized_total.item(), 5),
+            "Task": np.round(normalized_task.detach().cpu().numpy(), 5),
         }
 
         group_losses = weighted_loss.get("Group")
         if group_losses:
-            normalised_loss["Group"] = {
-                tag: round(loss_sum.div(weight_sum).item(), 5)
-                if weight_sum.item() > 0.0
-                else 0.0
+            normalized_loss["Group"] = {
+                tag: round(loss_sum.div(weight_sum).item(), 5) if weight_sum.item() > 0.0 else 0.0
                 for tag, (loss_sum, weight_sum) in group_losses.items()
             }
 
-        return normalised_loss
+        return normalized_loss
 
     def mw_metrics(self, y_true: Tensor, y_pred: Tensor, y_wgts: Tensor) -> Dict[str, Any]:
         """
@@ -544,10 +597,10 @@ class MMTUnit(nn.Module, ABC):
         }
 
     def set_loss_function(self, loss_fn: Any = torch.nn.BCEWithLogitsLoss, loss_params: Optional[dict] = None) -> None:
-        """Instantiate an element-wise loss function.
+        """
+        Instantiate an element-wise loss function.
 
-        The loss function must use `reduction="none"` so missing observations
-        can be masked and individual observations can be weighted.
+        The loss function must use `reduction="none"`
         """
         if not callable(loss_fn):
             raise ValueError("Loss function must be callable.")
@@ -660,3 +713,174 @@ class MMTUnit(nn.Module, ABC):
         """
         np.random.seed(seed)
         torch.manual_seed(seed)
+
+
+class MMClassificationUnit(MMUnit):
+    """
+    Abstract base class for binary classification multitask deep-learning models.
+
+    The class provides reusable training, evaluation, checkpointing, masked weighted-loss,
+    and metric-aggregation functionality. Subclasses must implement :meth:`forward`.
+
+    Parameters
+    ----------
+    device: str, default="cpu"
+        Device on which model calculations are performed.
+    num_task: int, default=1
+        Number of prediction tasks.
+    model_name: str, default="Unit"
+        Model identifier used in checkpoint filenames.
+    max_grad_norm: float, optional
+        Maximum gradient norm used for gradient clipping. Gradient clipping is disabled when this is `None`.
+    verbose: int, optional
+        Set verbosity level. 0 = no logs, 1 = standard progress, 2 = debugging
+    """
+
+    def __init__(self, device: str = "cpu", num_task: int = 1, model_name: str = "ClassificationUnit",
+                 max_grad_norm: Optional[float] = None, verbose: int = 1) -> None:
+        super().__init__(device=device, num_task=num_task, model_name=model_name, max_grad_norm=max_grad_norm,
+                         verbose=verbose)
+
+    @abstractmethod
+    def forward(self, batch_data: dict) -> Tensor:
+        """
+        Generate predictions for one batch.
+
+        Parameters
+        ----------
+        batch_data : dict
+            Mapping containing the model inputs.
+
+        Returns
+        -------
+        torch.Tensor
+            Model predictions with shape `(batch_size, num_task)`.
+        """
+
+    @staticmethod
+    def score(y_true: npt.NDArray, y_pred: npt.NDArray, y_wgts: Optional[npt.NDArray] = None,
+              y_score: Optional[npt.NDArray] = None):
+        """
+        Calculate classification performance metrics from known labels and predictions.
+
+        Parameters
+        ----------
+        y_true: npt.NDArray
+            One-dimensional array containing true binary target labels.
+        y_pred: npt.NDArray
+            One-dimensional array containing predicted binary target labels.
+        y_wgts: Optional[npt.NDArray]
+            One-dimensional array of non-negative sample weights.
+        y_score: npt.NDArray or None
+            One-dimensional array containing positive-class probabilities or scores.
+
+        Returns
+        -------
+        dict
+        """
+
+        def safe_div(numerator, denominator, default_=0.0):
+            return numerator / denominator if denominator != 0 else default_
+
+        conf_mat = confusion_matrix(y_true, y_pred, sample_weight=y_wgts)
+
+        TN, FP, FN, TP = conf_mat.ravel()
+
+        rec = safe_div(TP, TP + FN)
+        spec = safe_div(TN, TN + FP)
+
+        metrics = {
+            'TP': TP,
+            'FP': FP,
+            'FN': FN,
+            'TN': TN,
+            'Accuracy': rts(safe_div(TP + TN, TP + TN + FP + FN), 5),
+            'Recall': rts(rec, 5),
+            'Specificity': rts(spec, 5),
+            'Precision': rts(safe_div(TP, TP + FP), 5),
+            'Balanced Accuracy': rts((rec + spec) / 2, 5),
+            'GeomRS': rts(np.sqrt(rec * spec), 5),
+            'HarmRS': rts(safe_div(2 * rec * spec, rec + spec), 5),
+            'F1 Score': rts(safe_div(2 * TP, 2 * TP + FP + FN), 5),
+            'MCC': rts(safe_div((TP * TN) - (FP * FN), np.sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))), 5),
+        }
+
+        if y_score is not None:
+            metrics.update({
+                "ROC AUC": rts(roc_auc_score(y_true, y_score, sample_weight=y_wgts), 5),
+                'PRC AUC': rts(average_precision_score(y_true=y_true, y_score=y_score, sample_weight=y_wgts), 5),
+                'Brier': rts(brier_score_loss(y_true=y_true, y_proba=y_score, sample_weight=y_wgts), 5),
+                'ECE': rts(ece_score(y_true=y_true, y_score=y_score, sample_weight=y_wgts), 5)
+            })
+
+        return metrics
+
+
+class MMRegressionUnit(MMUnit):
+    """
+    Abstract base class for regression multitask deep-learning models.
+
+    The class provides reusable training, evaluation, checkpointing, masked weighted-loss,
+    and metric-aggregation functionality. Subclasses must implement :meth:`forward`.
+
+    Parameters
+    ----------
+    device: str, default="cpu"
+        Device on which model calculations are performed.
+    num_task: int, default=1
+        Number of prediction tasks.
+    model_name: str, default="Unit"
+        Model identifier used in checkpoint filenames.
+    max_grad_norm: float, optional
+        Maximum gradient norm used for gradient clipping. Gradient clipping is disabled when this is `None`.
+    verbose: int, optional
+        Set verbosity level. 0 = no logs, 1 = standard progress, 2 = debugging
+    """
+
+    def __init__(self, device: str = "cpu", num_task: int = 1, model_name: str = "RegressionUnit",
+                 max_grad_norm: Optional[float] = None, verbose: int = 1) -> None:
+        super().__init__(device=device, num_task=num_task, model_name=model_name, max_grad_norm=max_grad_norm,
+                         verbose=verbose)
+
+    @abstractmethod
+    def forward(self, batch_data: dict) -> Tensor:
+        """
+        Generate predictions for one batch.
+
+        Parameters
+        ----------
+        batch_data : dict
+            Mapping containing the model inputs.
+
+        Returns
+        -------
+        torch.Tensor
+            Model predictions with shape `(batch_size, num_task)`.
+        """
+
+    @staticmethod
+    def score(y_true: npt.NDArray, y_pred: npt.NDArray, y_wgts: npt.NDArray):
+        """
+        Calculate regression performance metrics from known and predicted target values.
+
+        Parameters
+        ----------
+        y_true: npt.NDArray
+            One-dimensional array containing true target values.
+        y_pred: npt.NDArray
+            One-dimensional array containing predicted target values.
+        y_wgts: npt.NDArray
+            One-dimensional array of non-negative sample weights.
+
+        Returns
+        -------
+        dict
+        """
+
+        metrics = {
+            'R2': rts(r2_score(y_true=y_true, y_pred=y_pred, sample_weight=y_wgts), 5),
+            'MAE': rts(mean_absolute_error(y_true=y_true, y_pred=y_pred, sample_weight=y_wgts), 5),
+            'RMSE': rts(root_mean_squared_error(y_true=y_true, y_pred=y_pred, sample_weight=y_wgts), 5)
+        }
+
+        return metrics
