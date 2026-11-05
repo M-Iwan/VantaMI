@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from typing import Iterable, List, Optional, Tuple, Union
 
+import math
 import numpy as np
 import numpy.typing as npt
+from joblib import Parallel, delayed, effective_n_jobs
+from itertools import chain
 
 try:
     from rdkit import Chem, RDLogger
@@ -21,7 +24,7 @@ class GraphVectorizer:
     Node features contain atom descriptors, periodic table group, and a partial-charge feature.
     Edge features contain bond descriptors and 3D bond distance.
 
-    Updated in Vantami 0.5.2
+    Updated in Vantami 0.5.3rc2
     """
 
     def __init__(self, atom_encoding: dict = None, bond_encoding: dict = None, suppress: bool = True):
@@ -241,7 +244,7 @@ class GraphVectorizer:
             edges.extend(bond_edges)
             encoding.extend([bond_enc, bond_enc])
 
-        return (np.asarray(edges, dtype=np.int64).T, np.vstack(encoding).astype(np.float32))
+        return np.asarray(edges, dtype=np.int32).T, np.vstack(encoding).astype(np.float32)
 
     def from_smiles(self, smiles: str, heavy_only: bool = True) -> Graph:
         """
@@ -272,8 +275,8 @@ class GraphVectorizer:
 
         return Graph(**graph_data)
 
-    def from_deepmol(self, deepmol: vantami.chem.molecule.DeepMolecule, charge_method: str = "Gasteiger",
-                     energy_method: Optional[str] = None, heavy_only: bool = True, combine_hydrogens: bool = False) -> Graph:
+    def from_deepmol(self, deepmol: DeepMolecule, charge_method: str = "Gasteiger", energy_method: Optional[str] = None,
+                     heavy_only: bool = True, combine_hydrogens: bool = False) -> Graph:
         """
         Generate a PyTorch Geometric graph from a prepared DeepMolecule object.
 
@@ -315,45 +318,93 @@ class GraphVectorizer:
 
         return Graph(**graph_data)
 
-    def encode_smiles(self, smiles: Union[str, Iterable[str]]) -> List[Graph]:
+    @staticmethod
+    def _prepare_batches(data: Union[Iterable[str], Iterable[DeepMolecule]], n_jobs: int = 1, batch_size: int = 256):
         """
-        Convert one or more SMILES strings into PyTorch Geometric graphs.
+        Prepare batches of SMILES strings or DeepMolecules for downstream processing.
+        """
+
+        if batch_size < 1:
+            raise ValueError(f"Batch size must be >= 1, got {batch_size} instead.")
+
+        n_jobs = min(effective_n_jobs(n_jobs), len(data))
+        n_batches = max(n_jobs, math.ceil(len(data) / batch_size))
+        data_batches = np.array_split(data, n_batches)
+
+        return data, n_jobs, data_batches
+
+    def encode_smiles(self, smiles: str | Iterable[str], heavy_only: bool = True) -> List[Graph]:
+        """
+        Convert one or multiple SMILES strings into PyTorch Geometric graphs.
 
         Parameters
         ----------
-        smiles: Union[str, Iterable[str]]
-            A single SMILES string or an iterable of SMILES strings to encode.
+        smiles: str | Iterable[str]
+            An Iterable of SMILES strings to encode.
+        heavy_only: bool
+            Whether to include only bonds between heavy atoms.
+
+        Returns
+        -------
+        List[Graph]
+        """
+        if isinstance(smiles, str):
+            return [self.from_smiles(smiles, heavy_only=heavy_only)]
+
+        elif hasattr(smiles, "__iter__") and all(isinstance(item, str) for item in smiles):
+            return [self.from_smiles(smi, heavy_only=heavy_only) for smi in smiles]
+
+        else:
+            raise TypeError(f"Expected < smiles > to be either str or Iterable[str], got {type(smiles)} instead.")
+
+    def encode_many_smiles(self, smiles: Iterable[str], heavy_only: bool = True, n_jobs: int = 1,
+                           batch_size: int = 256, timeout: int | None = None) -> List[Graph]:
+        """
+        Convert multiple SMILES strings into PyTorch Geometric graphs in parallel.
+
+        Parameters
+        ----------
+        smiles: Iterable[str]
+            An Iterable of SMILES strings to encode.
+        heavy_only: bool
+            Whether to include only bonds between heavy atoms.
+        n_jobs: int, optional
+            Number of cores to use for calculations.
+        batch_size: int, optional
+            Number of SMILES per batch.
+        timeout: int | None, optional
+            Timeout per worker. Defaults to None, i.e., no timeout
 
         Returns
         -------
         List[Graph]
         """
 
-        if isinstance(smiles, str):
-            return [self.from_smiles(smiles)]
+        smiles, n_jobs, smiles_batches = self._prepare_batches(
+            smiles, n_jobs, batch_size
+        )
+        if not smiles:
+            return []
 
-        elif hasattr(smiles, "__iter__") and all(isinstance(item, str) for item in smiles):
-            return [self.from_smiles(smi) for smi in smiles]
+        out = Parallel(n_jobs=n_jobs, verbose=1, timeout=timeout, backend="loky")(
+            delayed(self.encode_smiles)(smiles=smi, heavy_only=heavy_only) for smi in smiles_batches
+        )
 
-        else:
-            raise TypeError(f"Expected < smiles > to be either str or Iterable[str], got {type(smiles)} instead.")
-
+        return list(chain.from_iterable(out))
 
     def encode_deepmol(self, deepmol: Union[DeepMolecule, Iterable[DeepMolecule]], charge_method: str = "Gasteiger",
-                     energy_method: Optional[str] = None, heavy_only: bool = True, combine_hydrogens: bool = False) -> List[Graph]:
+                       energy_method: Optional[str] = None, heavy_only: bool = True, combine_hydrogens: bool = False) -> List[Graph]:
         """
         Convert one or more prepared DeepMolecule objects into graph representations.
 
         Parameters
         ----------
         deepmol: Union[DeepMolecule, Iterable[DeepMolecule]]
-            A single prepared DeepMolecule object or an iterable of DeepMolecule
-            objects to encode.
+            A single prepared DeepMolecule object or an iterable of DeepMolecule objects to encode.
         charge_method: str
             Method used to calculate or retrieve partial atomic charges.
         energy_method: Optional[str]
-            Method used to select the lowest-energy conformer. If `None`, the default
-            conformer-selection method is used.
+            Method used to select the lowest-energy conformer. If `None`, the default conformer-selection method is used.
         heavy_only: bool
             Whether to include only heavy atoms and bonds between heavy atoms.
         combine_hydrogens: bool
@@ -367,7 +418,7 @@ class GraphVectorizer:
         try:
             from vantami.chem.molecule import DeepMolecule
         except ImportError as exc:
-            raise ImportError(f"Method < encode_deepmol > requires < vantami > 0.5.2 or higher.")
+            raise ImportError(f"Method < encode_deepmol > requires < vantami > 0.5.2 or higher.") from exc
         if isinstance(deepmol, DeepMolecule):
             return [
                 self.from_deepmol(deepmol, charge_method=charge_method, energy_method=energy_method,
@@ -384,3 +435,48 @@ class GraphVectorizer:
         else:
             raise TypeError(f"Expected < deepmol > to be either DeepMolecule or Iterable[DeepMolecule],"
                             f"got {type(deepmol)} instead.")
+
+    def encode_many_deepmol(self, deepmol: Iterable[DeepMolecule], charge_method: str = "Gasteiger",
+                            energy_method: Optional[str] = None, heavy_only: bool = True, combine_hydrogens: bool = False,
+                            n_jobs: int = 1, batch_size: int = 256, timeout: int | None = None) -> List[Graph]:
+        """
+        Convert multiple DeepMolecules into PyTorch Geometric graphs in parallel.
+
+        Parameters
+        ----------
+        deepmol: Iterable[DeepMolecule]
+            Prepared DeepMolecule objects.
+        charge_method: str
+            Method used to calculate or retrieve partial atomic charges.
+        energy_method: Optional[str]
+            Method used to select the lowest-energy conformer. If `None`, the default conformer-selection method is used.
+        heavy_only: bool
+            Whether to include only heavy atoms and bonds between heavy atoms.
+        combine_hydrogens: bool
+            Whether to combine hydrogen charges with their associated heavy atoms.
+        n_jobs: int, optional
+            Number of cores to use for calculations.
+        batch_size: int, optional
+            Number of SMILES per batch.
+        timeout: int | None
+            Timeout per worker. Defaults to None, i.e., no timeout
+
+        Returns
+        -------
+        List[Graph]
+        """
+
+        deepmols, n_jobs, deepmol_batches = self._prepare_batches(
+            deepmol, n_jobs, batch_size
+        )
+        if not deepmols:
+            return []
+
+        out = Parallel(n_jobs=n_jobs, verbose=1, timeout=timeout, backend="loky")(
+            delayed(self.encode_deepmol)(
+                deepmol=dm, charge_method=charge_method, energy_method=energy_method, heavy_only=heavy_only,
+                combine_hydrogens=combine_hydrogens
+            ) for dm in deepmol_batches
+        )
+
+        return list(chain.from_iterable(out))
