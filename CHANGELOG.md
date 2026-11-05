@@ -1,6 +1,23 @@
+# [0.5.3]: 05-11-2026
+[Added]
+- Conformer generation script
+- Automated directory building to IO functions
+- Zarr-backed datasets for Deep Learning
+- New module (vantami.dl.storage) for serializing supported modalities to Zarr
+
+[Updated]
+- Cleaned, added docstrings, and generally updated both vantami.dl.modules and vantami.dl.models/unit
+
+[Changed]
+- Updated Uni-pKa scripts to a final working version
+- Split vantami.dl.models into vantami.dl.unit, which hosts the ABC, and vantami.dl.models for implemented models
+
+[Fixed]
+- Incorrect argument parsing in brier_score_loss (vantami.ml.models:ClassifierUnit)
+
 # [0.5.2]: 02-11-2026
 [Added]
-- Support for Mordred descriptors using community maintained Mordred packgae
+- Support for Mordred descriptors using community maintained Mordred package
 - Parameters for RandomSearch
 - Setup files for Uni-pKa allowing for calculating (the most likely) protonation states at a given pH
 - vantami.data.distance group_distance for calculating distributions of pairwise distances between groups
@@ -55,7 +72,7 @@
 
 # [0.4.6]: 08-10-2026
 [Added]
-- Modelling configurations for new descriptors
+- Modeling configurations for new descriptors
 - Array concatenation in dataframes with automated data type detection
 
 [Changed]
@@ -105,13 +122,13 @@
 # [0.4.2]: 21-08-2026
 
 [Added]
-- R-based repository called novami-r with code for Linear Mixed Models analyses
+- R-based repository called vantami-r with code for Linear Mixed Models analyses
 - More functions for flagging and filtering compounds
 - New module: stats; so far with Mann-Whitney U-test
 - New function for string distances
 
 [Changed]
-- tokenize_documents supports various filters (alpha, alnum, ascii) 
+- tokenize_documents supports various filters (alpha, alnum, ascii)
 
 # [0.4.1]: 11-08-2026
 
@@ -143,7 +160,8 @@
 - Extend functionality of group_k_neighbors_distance
 - Add W.I.P. Winsorization to DataTransformer
 - (Partially) clean the deep module
-- ``MMDataset`` / ``MMBatch``, ``MMLoader``, and ``MMTUnit`` as the primary deep stack; legacy ``GNNRegressor`` and ``MMGV`` moved under ``deprecated/deep/`` with optional re-exports
+- ``MMDataset`` / ``MMBatch``, ``MMLoader``, and ``MMTUnit`` as the primary deep stack; legacy ``GNNRegressor``
+and ``MMGV`` moved under ``deprecated/deep/`` with optional re-exports
 - Calculations for Precision-Recall Curve AUC, Expected Calibration Error, Brier Score
 - New QCG template for KFold-like calculations
 
