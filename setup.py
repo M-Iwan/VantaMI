@@ -16,7 +16,7 @@ package_data: dict[str, list[str]] = {
 
 setup(
     name="vantami",
-    version="0.5.2",
+    version="0.5.3.rc1",
     author="Mateusz Iwan",
     author_email="mateusz.iwan@hotmail.com",
     description="A collection of ML/AI tools for chemistry applications.",
@@ -44,7 +44,7 @@ setup(
             "rdkit >= 2026.03",
             "transformers >= 5.5",
             "sentence_transformers >= 6.0",
-            "optuna >= 5.0"
+            "optuna >= 5.0",
         ],
     },
     python_requires=">=3.13",
