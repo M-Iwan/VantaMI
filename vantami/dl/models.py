@@ -40,7 +40,8 @@ class IonMeleon(MMRegressionUnit):
                  gnn_params: Optional[Dict] = None, lin_params: Optional[Dict] = None,
                  max_grad_norm: Optional[float] = 1.0, keep_fraction: Optional[float] = 0.15,
                  verbose: Optional[int] = 1):
-        super().__init__(device=device, num_task=num_task, model_name=model_name, max_grad_norm=max_grad_norm)
+        super().__init__(device=device, num_task=num_task, model_name=model_name, max_grad_norm=max_grad_norm,
+                         verbose=verbose)
         self.gnn_params = gnn_params
         self.lin_params = lin_params
         self.gnn_input_name = self.gnn_params.get('input_name', "Graph")
