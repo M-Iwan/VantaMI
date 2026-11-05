@@ -11,11 +11,12 @@ Full install:
 
 `pip install "vantami[full]"`
 
-The usual versioning conventions are followed loosely, with minor version bumps usually
-corresponding to a substantial update to a specific module.
+The usual versioning conventions are followed loosely, with minor version bumps usually corresponding to a substantial
+update to a specific module.
 
 ### Repository Structure
-Current version: 0.5.2.rc1
+
+Current version: 0.5.3
 
 ```
 vantami/
@@ -46,10 +47,12 @@ vantami/
 │   │   ├── partition.py           Partitioning algoriths; convenience wrappers around scikit-learn and cluster.py
 │   │   └── transform.py           Main class for normalizing/processing data before training
 │   ├── dl/
-│   │   ├── dataset.py             MMDataset / MMBatch for multi-modal Polars-backed samples
-│   │   ├── loader.py              MMLoader (collate → MMBatch)
-│   │   ├── models.py              MMTUnit base class and concrete units (e.g. TestModel)
+│   │   ├── dataset.py             Polars/Zarr-backend MMDatasets
+│   │   ├── loader.py              MMLoader for datasets
+│   │   ├── models.py              Implementations based on MMUnit class
 │   │   ├── modules.py             GNN/CNN/RNN/linear builders used by units
+│   │   ├── storage.py             Function for saving polars dfs to Zarr format
+│   │   ├── utils.py               Parent MMUnit class
 │   │   ├── utils.py               Activations and small helpers
 │   │   └── vectorizer/            Vectorizers
 │   │       ├── graph.py           GraphVectorizer
