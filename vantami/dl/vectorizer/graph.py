@@ -18,7 +18,7 @@ except ImportError as exc:
 
 
 import warnings
-warnings.simplefilter(action='ignore', category=FutureWarning)
+warnings.simplefilter(action="ignore", category=FutureWarning)
 
 
 class GraphVectorizer:
@@ -54,19 +54,19 @@ class GraphVectorizer:
             self.atom_encoding = atom_encoding
 
         self.groups = {
-            0: ['H', 'C', 'N', 'O', 'P', 'S'],  # non_metals
-            1: ['Li', 'Na', 'K', 'Rb', ' Cs', 'Fr'],  # alkaline metals
-            2: ['Be', 'Mg', 'Ca', 'Sr', ' Ba', 'Ra'],  # alkaline earth metals
-            3: ['Sc', 'Ti', 'V', 'Cr', 'Mn', 'Fe', 'Co', 'Ni', 'Cu', 'Zn',
-                'Y', 'Zr', 'Nb', 'Mo', 'Tc', 'Ru', 'Rh', 'Pd', 'Age', 'Cd',
-                'Hf', 'Ta', 'W', 'Re', 'Os', 'Ir', 'Pt', 'Au', 'Hg',
-                'Rf', 'Db', 'Sg', 'Hs', 'Mt', 'Ds', 'Rg', 'Cn'],  # transition metals
-            4: ['Al', 'Ga', 'In', 'Sn', 'Tl', 'Pb', 'Bi', 'Nh', 'Fl', 'Mc', 'Lv'],  # metals
-            5: ['B', 'Si', 'Ge', 'As', 'Sb', 'Te', 'Po'],  # metalloids
-            6: ['F', 'Cl', 'Br', 'I', 'At', 'Ts'],  # halogens
-            7: ['He', 'Ne', 'Ar', 'Kr', 'Xe', 'Rn', 'Og'],  # noble gases
-            8: ['La', 'Ce', 'Pr', 'Nd', 'Pm', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy', 'Ho', 'Er', 'Tm', 'Yb', 'Lu'],  # lanthanide
-            9: ['Ac', 'Th', 'Pa', 'U', 'Np', 'Pu', 'Am', 'Cm', 'Bk', 'Cf', 'Es', 'Fm', 'Md', 'No', 'Lr']  # actinides
+            0: ["H", "C", "N", "O", "P", "S"],  # non_metals
+            1: ["Li", "Na", "K", "Rb", "Cs", "Fr"],  # alkaline metals
+            2: ["Be", "Mg", "Ca", "Sr", "Ba", "Ra"],  # alkaline earth metals
+            3: ["Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn",
+                "Y", "Zr", "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd",
+                "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg",
+                "Rf", "Db", "Sg", "Hs", "Mt", "Ds", "Rg", "Cn"],  # transition metals
+            4: ["Al", "Ga", "In", "Sn", "Tl", "Pb", "Bi", "Nh", "Fl", "Mc", "Lv"],  # metals
+            5: ["B", "Si", "Ge", "As", "Sb", "Te", "Po"],  # metalloids
+            6: ["F", "Cl", "Br", "I", "At", "Ts"],  # halogens
+            7: ["He", "Ne", "Ar", "Kr", "Xe", "Rn", "Og"],  # noble gases
+            8: ["La", "Ce", "Pr", "Nd", "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb", "Lu"],  # lanthanide
+            9: ["Ac", "Th", "Pa", "U", "Np", "Pu", "Am", "Cm", "Bk", "Cf", "Es", "Fm", "Md", "No", "Lr"]  # actinides
         }
 
         self.group_encoding = {}
@@ -248,7 +248,7 @@ class GraphVectorizer:
             edges.extend(bond_edges)
             encoding.extend([bond_enc, bond_enc])
 
-        return np.asarray(edges, dtype=np.int32).T, np.vstack(encoding).astype(np.float32)
+        return np.asarray(edges, dtype=np.int64).T, np.vstack(encoding).astype(np.float32)
 
     def from_smiles(self, smiles: str, heavy_only: bool = True) -> Graph:
         """
@@ -268,7 +268,7 @@ class GraphVectorizer:
 
         mol = Chem.MolFromSmiles(smiles, sanitize=True)
 
-        atoms_encoding_array = self.encode_mol_atoms(mol)
+        atoms_encoding_array = self.encode_mol_atoms(mol, heavy_only=heavy_only)
         edges_array, bonds_encoding_array = self.encode_mol_bonds(mol, heavy_only=heavy_only)
 
         graph_data = {
@@ -609,6 +609,7 @@ class GraphVectorizer:
             graph.spatial_edge_index = torch.empty((2, 0), dtype=torch.long)
             graph.spatial_edge_dist = torch.empty((0,), dtype=torch.float32)
             graph.spatial_edge_weight = torch.empty((0,), dtype=torch.float32)
+            graph.spatial_edge_attr = torch.empty((0, n_rbf), dtype=torch.float32)
             return graph
 
         spatial_edge_index = spatial_pairs.t().contiguous().to(torch.long)
