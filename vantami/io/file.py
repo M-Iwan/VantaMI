@@ -141,7 +141,17 @@ def read_pd(path: Union[str, Path], kwargs: Optional[Dict] = None) -> pd.DataFra
     elif ext == ".parquet":
         df = pd.read_parquet(path, **kwargs)
     elif ext == ".pkl":
-        df = pd.read_pickle(path, compression=compression, **kwargs)
+        if compression is None:
+            with open(path, "rb") as file:
+                df = pickle.load(file)
+        else:
+            df = pickle.loads(_read_compressed_bytes(path, compression))
+    elif ext == ".joblib":
+        if compression is None:
+            df = joblib.load(path)
+        else:
+            data = _read_compressed_bytes(path, compression)
+            df = joblib.load(io.BytesIO(data))
     else:
         raise ValueError(f"Extension < {ext} > is not supported.")
 
@@ -191,9 +201,23 @@ def write_pd(df: pd.DataFrame, path: Union[str, Path], kwargs: Optional[Dict] = 
     elif ext == ".parquet":
         df.to_parquet(path, **kwargs)
     elif ext == ".pkl":
-        df.to_pickle(path, compression=compression, **kwargs)
+        data = pickle.dumps(df)
+
+        if compression is None:
+            with open(path, "wb") as file:
+                file.write(data)
+        else:
+            _write_compressed_bytes(data, path, compression)
     elif ext == ".joblib":
-        joblib.dump(df, path, **kwargs)
+        buffer = io.BytesIO()
+        joblib.dump(df, buffer)
+        data = buffer.getvalue()
+
+        if compression is None:
+            with open(path, "wb") as file:
+                file.write(data)
+        else:
+            _write_compressed_bytes(data, path, compression)
     else:
         raise ValueError(f"Extension < {ext} > is not supported.")
 

@@ -1167,6 +1167,85 @@ class DeepMolecule:
 
         return lowest_conf_id, lowest_energy
 
+    def retain_lowest_energy_conformer(self, method: Optional[OptimizationMethod] = None, *,
+                                       keep_global_charge_sets: bool = True) -> tuple[int, float]:
+        """
+        Retain only the lowest-energy conformer and its relevant cached results.
+
+        Parameters
+        ----------
+        method: Optional[OptimizationMethod]
+            Energy method used to select the conformer. When omitted, uses the previously recorded lowest-energy method.
+        keep_global_charge_sets: bool
+            Preserve conformer-independent charge sets, such as Gasteiger or MMFF charges.
+
+        Returns
+        -------
+        tuple[int, float]
+            Retained RDKit conformer ID and its energy.
+
+        Notes
+        -----
+        The selected conformer's original RDKit ID is preserved. All other conformers are removed from ``self.mol``.
+        """
+        conf_id, energy = self.get_lowest_energy_conformer(method=method)
+        selected_method = method or self.lowest_energy_method
+
+        if selected_method is None:
+            raise RuntimeError("Could not resolve the lowest-energy method.")
+
+        for conformer in list(self.mol.GetConformers()):
+            if conformer.GetId() != conf_id:
+                self.mol.RemoveConformer(conformer.GetId())
+
+        self._energies = {
+            (cached_conf_id, cached_method): cached_energy
+            for (cached_conf_id, cached_method), cached_energy in self._energies.items()
+            if cached_conf_id == conf_id and cached_method == selected_method
+        }
+
+        self._descriptors = {
+            (cached_conf_id, cached_method): descriptors
+            for (cached_conf_id, cached_method), descriptors in self._descriptors.items()
+            if cached_conf_id == conf_id and cached_method == selected_method
+        }
+
+        self._charge_sets = {
+            (cached_conf_id, charge_method): charges
+            for (cached_conf_id, charge_method), charges in self._charge_sets.items()
+            if cached_conf_id == conf_id or (keep_global_charge_sets and cached_conf_id is None)
+        }
+
+        self.lowest_energy_conf_id = conf_id
+        self.lowest_energy_method = selected_method
+        self.energy = float(energy)
+        self.energy_method = selected_method
+
+        active_charges = None
+        if self._active_charge_method is not None:
+            active_charges = self._charge_sets.get(
+                (conf_id, self._active_charge_method),
+                self._charge_sets.get((None, self._active_charge_method)),
+            )
+
+        if active_charges is None:
+            self._active_charge_method = None
+            for atom in self.mol.GetAtoms():
+                for property_name in ("partial_charge", "partial_charge_method"):
+                    if atom.HasProp(property_name):
+                        atom.ClearProp(property_name)
+
+            if self.mol.HasProp("partial_charge_method"):
+                self.mol.ClearProp("partial_charge_method")
+        else:
+            for atom, partial_charge in zip(self.mol.GetAtoms(), active_charges):
+                atom.SetDoubleProp("partial_charge", float(partial_charge))
+                atom.SetProp("partial_charge_method", self._active_charge_method)
+
+            self.mol.SetProp("partial_charge_method", self._active_charge_method)
+
+        return conf_id, float(energy)
+
     def save(self, path: Union[str, Path]) -> Path:
         """
         Serialize the molecule, conformers, and cached calculation results.

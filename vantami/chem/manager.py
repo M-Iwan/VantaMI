@@ -352,6 +352,31 @@ class DeepMoleculeManager:
                     if not self.errors.get(item):
                         self.errors.pop(item, None)
 
+    def retain_lowest_energy_conformers(self, smiles: Optional[Sequence[str]] = None, *,
+                                        keep_global_charge_sets: bool = True) -> None:
+        """
+        Prune successful conformer-search results to one conformer per molecule.
+        """
+        requested_smiles = list(self.molecules if smiles is None else smiles)
+
+        unknown = [smi for smi in requested_smiles if smi not in self.molecules]
+        if unknown:
+            raise KeyError(f"Cannot prune unregistered molecules: {unknown!r}")
+
+        for smi in requested_smiles:
+            result = self.conformer_results.get(smi)
+
+            if result is None or result["status"] != "success":
+                continue
+
+            molecule = self.molecules[smi]
+            conf_id, energy = molecule.retain_lowest_energy_conformer(
+                method=result["method"],
+                keep_global_charge_sets=keep_global_charge_sets,
+            )
+
+            result["conformer_id"] = conf_id
+            result["energy"] = energy
 
     def summary(self) -> dict[str, int]:
         """

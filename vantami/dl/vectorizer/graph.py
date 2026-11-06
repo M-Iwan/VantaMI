@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from typing import Iterable, List, Optional, Tuple, Union
 
+import math
 import numpy as np
 import numpy.typing as npt
+from joblib import Parallel, delayed, effective_n_jobs
+from itertools import chain
 
 try:
     from rdkit import Chem, RDLogger
@@ -14,6 +17,10 @@ except ImportError as exc:
     raise ImportError(f"GraphVectorizer requires rdkit, torch, and torch_geometric:\n{exc} ")
 
 
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
+
 class GraphVectorizer:
     """
     Turn SMILES or prepared DeepMolecule objects into torch_geometric Data.
@@ -21,7 +28,7 @@ class GraphVectorizer:
     Node features contain atom descriptors, periodic table group, and a partial-charge feature.
     Edge features contain bond descriptors and 3D bond distance.
 
-    Updated in Vantami 0.5.2
+    Updated in Vantami 0.5.3rc2
     """
 
     def __init__(self, atom_encoding: dict = None, bond_encoding: dict = None, suppress: bool = True):
@@ -241,7 +248,7 @@ class GraphVectorizer:
             edges.extend(bond_edges)
             encoding.extend([bond_enc, bond_enc])
 
-        return (np.asarray(edges, dtype=np.int64).T, np.vstack(encoding).astype(np.float32))
+        return np.asarray(edges, dtype=np.int32).T, np.vstack(encoding).astype(np.float32)
 
     def from_smiles(self, smiles: str, heavy_only: bool = True) -> Graph:
         """
@@ -272,8 +279,8 @@ class GraphVectorizer:
 
         return Graph(**graph_data)
 
-    def from_deepmol(self, deepmol: vantami.chem.molecule.DeepMolecule, charge_method: str = "Gasteiger",
-                     energy_method: Optional[str] = None, heavy_only: bool = True, combine_hydrogens: bool = False) -> Graph:
+    def from_deepmol(self, deepmol: DeepMolecule, charge_method: str = "Gasteiger", energy_method: Optional[str] = None,
+                     heavy_only: bool = True, combine_hydrogens: bool = False, include_pos: bool = False) -> Graph:
         """
         Generate a PyTorch Geometric graph from a prepared DeepMolecule object.
 
@@ -290,6 +297,8 @@ class GraphVectorizer:
             Whether to include only heavy atoms and bonds between heavy atoms.
         combine_hydrogens: bool
             Whether to combine hydrogen charges with their associated heavy atoms.
+        include_pos: bool
+            Whether to include atom positions in the Graph object.
 
         Returns
         -------
@@ -313,51 +322,121 @@ class GraphVectorizer:
             "edge_attr": torch.from_numpy(bonds_encoding_array),
         }
 
+        if include_pos:
+            graph_data["pos"] = torch.from_numpy(positions).to(torch.float32)
+
         return Graph(**graph_data)
 
-    def encode_smiles(self, smiles: Union[str, Iterable[str]]) -> List[Graph]:
+    @staticmethod
+    def _prepare_batches(data: Union[Iterable[str], Iterable[DeepMolecule], Iterable[Graph]], n_jobs: int = 1,
+                         batch_size: int = 256):
         """
-        Convert one or more SMILES strings into PyTorch Geometric graphs.
+        Prepare batches of SMILES strings, DeepMolecules, or Graphs for downstream processing.
+        """
+        if batch_size < 1:
+            raise ValueError(f"Batch size must be >= 1, got {batch_size} instead.")
+
+        data = list(data)
+
+        if not data:
+            return data, 0, []
+
+        n_jobs = min(effective_n_jobs(n_jobs), len(data))
+        n_batches = max(n_jobs, math.ceil(len(data) / batch_size))
+
+        base_size, remainder = divmod(len(data), n_batches)
+
+        data_batches = []
+        start = 0
+
+        for batch_idx in range(n_batches):
+            current_size = base_size + (batch_idx < remainder)
+
+            if current_size:
+                data_batches.append(data[start:start + current_size])
+                start += current_size
+
+        return data, n_jobs, data_batches
+
+    def encode_smiles(self, smiles: str | Iterable[str], heavy_only: bool = True) -> List[Graph]:
+        """
+        Convert one or multiple SMILES strings into PyTorch Geometric graphs.
 
         Parameters
         ----------
-        smiles: Union[str, Iterable[str]]
-            A single SMILES string or an iterable of SMILES strings to encode.
+        smiles: str | Iterable[str]
+            An Iterable of SMILES strings to encode.
+        heavy_only: bool
+            Whether to include only bonds between heavy atoms.
+
+        Returns
+        -------
+        List[Graph]
+        """
+        if isinstance(smiles, str):
+            return [self.from_smiles(smiles, heavy_only=heavy_only)]
+
+        elif hasattr(smiles, "__iter__") and all(isinstance(item, str) for item in smiles):
+            return [self.from_smiles(smi, heavy_only=heavy_only) for smi in smiles]
+
+        else:
+            raise TypeError(f"Expected < smiles > to be either str or Iterable[str], got {type(smiles)} instead.")
+
+    def encode_many_smiles(self, smiles: Iterable[str], heavy_only: bool = True, n_jobs: int = 1,
+                           batch_size: int = 256, timeout: int | None = None) -> List[Graph]:
+        """
+        Convert multiple SMILES strings into PyTorch Geometric graphs in parallel.
+
+        Parameters
+        ----------
+        smiles: Iterable[str]
+            An Iterable of SMILES strings to encode.
+        heavy_only: bool
+            Whether to include only bonds between heavy atoms.
+        n_jobs: int, optional
+            Number of cores to use for calculations.
+        batch_size: int, optional
+            Number of SMILES per batch.
+        timeout: int | None, optional
+            Timeout per worker. Defaults to None, i.e., no timeout
 
         Returns
         -------
         List[Graph]
         """
 
-        if isinstance(smiles, str):
-            return [self.from_smiles(smiles)]
+        smiles, n_jobs, smiles_batches = self._prepare_batches(
+            smiles, n_jobs, batch_size
+        )
+        if not smiles:
+            return []
 
-        elif hasattr(smiles, "__iter__") and all(isinstance(item, str) for item in smiles):
-            return [self.from_smiles(smi) for smi in smiles]
+        out = Parallel(n_jobs=n_jobs, verbose=1, timeout=timeout, backend="loky")(
+            delayed(self.encode_smiles)(smiles=smi, heavy_only=heavy_only) for smi in smiles_batches
+        )
 
-        else:
-            raise TypeError(f"Expected < smiles > to be either str or Iterable[str], got {type(smiles)} instead.")
-
+        return list(chain.from_iterable(out))
 
     def encode_deepmol(self, deepmol: Union[DeepMolecule, Iterable[DeepMolecule]], charge_method: str = "Gasteiger",
-                     energy_method: Optional[str] = None, heavy_only: bool = True, combine_hydrogens: bool = False) -> List[Graph]:
+                       energy_method: Optional[str] = None, heavy_only: bool = True, combine_hydrogens: bool = False,
+                       include_pos: bool = False) -> List[Graph]:
         """
         Convert one or more prepared DeepMolecule objects into graph representations.
 
         Parameters
         ----------
         deepmol: Union[DeepMolecule, Iterable[DeepMolecule]]
-            A single prepared DeepMolecule object or an iterable of DeepMolecule
-            objects to encode.
+            A single prepared DeepMolecule object or an iterable of DeepMolecule objects to encode.
         charge_method: str
             Method used to calculate or retrieve partial atomic charges.
         energy_method: Optional[str]
-            Method used to select the lowest-energy conformer. If `None`, the default
-            conformer-selection method is used.
+            Method used to select the lowest-energy conformer. If `None`, the default conformer-selection method is used.
         heavy_only: bool
             Whether to include only heavy atoms and bonds between heavy atoms.
         combine_hydrogens: bool
             Whether to combine hydrogen charges with their associated heavy atoms.
+        include_pos: bool
+            Whether to include atom positions in the Graph object.
 
         Returns
         -------
@@ -367,20 +446,264 @@ class GraphVectorizer:
         try:
             from vantami.chem.molecule import DeepMolecule
         except ImportError as exc:
-            raise ImportError(f"Method < encode_deepmol > requires < vantami > 0.5.2 or higher.")
+            raise ImportError(f"Method < encode_deepmol > requires < vantami > 0.5.2 or higher.") from exc
         if isinstance(deepmol, DeepMolecule):
             return [
                 self.from_deepmol(deepmol, charge_method=charge_method, energy_method=energy_method,
-                                  heavy_only=heavy_only, combine_hydrogens=combine_hydrogens),
+                                  heavy_only=heavy_only, combine_hydrogens=combine_hydrogens,
+                                  include_pos=include_pos),
             ]
 
         elif hasattr(deepmol, "__iter__") and all (isinstance(item, DeepMolecule) for item in deepmol):
             return [
                 self.from_deepmol(dm, charge_method=charge_method, energy_method=energy_method,
-                                  heavy_only=heavy_only, combine_hydrogens=combine_hydrogens)
+                                  heavy_only=heavy_only, combine_hydrogens=combine_hydrogens,
+                                  include_pos=include_pos)
                 for dm in deepmol
             ]
 
         else:
             raise TypeError(f"Expected < deepmol > to be either DeepMolecule or Iterable[DeepMolecule],"
                             f"got {type(deepmol)} instead.")
+
+    def encode_many_deepmol(self, deepmol: Iterable[DeepMolecule], charge_method: str = "Gasteiger",
+                            energy_method: Optional[str] = None, heavy_only: bool = True, combine_hydrogens: bool = False,
+                            include_pos: bool = False, n_jobs: int = 1, batch_size: int = 256,
+                            timeout: int | None = None) -> List[Graph]:
+        """
+        Convert multiple DeepMolecules into PyTorch Geometric graphs in parallel.
+
+        Parameters
+        ----------
+        deepmol: Iterable[DeepMolecule]
+            Prepared DeepMolecule objects.
+        charge_method: str
+            Method used to calculate or retrieve partial atomic charges.
+        energy_method: Optional[str]
+            Method used to select the lowest-energy conformer. If `None`, the default conformer-selection method is used.
+        heavy_only: bool
+            Whether to include only heavy atoms and bonds between heavy atoms.
+        combine_hydrogens: bool
+            Whether to combine hydrogen charges with their associated heavy atoms.
+        include_pos: bool
+            Whether to include atom positions in the Graph object.
+        n_jobs: int, optional
+            Number of cores to use for calculations.
+        batch_size: int, optional
+            Number of SMILES per batch.
+        timeout: int | None
+            Timeout per worker. Defaults to None, i.e., no timeout
+
+        Returns
+        -------
+        List[Graph]
+        """
+
+        deepmols, n_jobs, deepmol_batches = self._prepare_batches(
+            deepmol, n_jobs, batch_size
+        )
+        if not deepmols:
+            return []
+
+        out = Parallel(n_jobs=n_jobs, verbose=1, timeout=timeout, backend="loky")(
+            delayed(self.encode_deepmol)(
+                deepmol=dm, charge_method=charge_method, energy_method=energy_method, heavy_only=heavy_only,
+                combine_hydrogens=combine_hydrogens, include_pos=include_pos
+            ) for dm in deepmol_batches
+        )
+
+        return list(chain.from_iterable(out))
+
+
+    @staticmethod
+    def _cosine_smooth(distances: torch.Tensor, r_on: float = 4.0, r_off: float = 6.0):
+        weights = torch.zeros_like(distances)
+
+        near = distances <= r_on
+        transition = (distances > r_on) & (distances < r_off)
+
+        weights[near] = 1.0
+
+        scaled_distance = (distances[transition] - r_on) / (r_off - r_on)
+        weights[transition] = 0.5 * (torch.cos(torch.pi * scaled_distance) + 1.0)
+
+        return weights
+
+    @staticmethod
+    def _gaussian_rbf(distances: torch.Tensor, r_off: float, n_rbf: int = 32) -> torch.Tensor:
+        """
+        Encode spatial distances into a Gaussian RBF
+        """
+        centers = torch.linspace(0.0, r_off, n_rbf, dtype=distances.dtype)
+
+        spacing = r_off / (n_rbf - 1)
+        gamma = 1.0 / (spacing ** 2)
+
+        return torch.exp(-gamma * (distances.unsqueeze(-1) - centers).pow(2))
+
+    def from_graph(self, graph: Graph, cutoff: float | Tuple[float, float], n_rbf: int = 32) -> Graph:
+        """
+        Encode 3D non-covalent spatial edges from graph.pos
+
+        Parameters
+        ----------
+        graph: Graph
+            Graph object prepared from `meth`:encode_deepmol that includes `pos`.
+        cutoff: float | Tuple[float, float]
+            If float: hard outer cutoff. All selected spatial edges get weight 1.0.
+            If tuple (r_on, r_off): Smooth transition region. Edges are generated up to r_off.
+                Edge weights are 1.0 up to r_on and smoothly decay to 0.0 at r_off.
+        n_rbf: int, optional
+            Number of Gaussian Radial Basis Functions to use for encoding distances
+
+        Adds
+        ----
+        graph.spatial_edge_index:
+            Long tensor of shape [2, E_spatial].
+        graph.spatial_edge_dist:
+            Float tensor of shape [E_spatial].
+        graph.spatial_edge_weight:
+            Float tensor of shape [E_spatial].
+        graph.spatial_edge_attr:
+            Float tensor of shape [E_spatial].
+        """
+
+        if not hasattr(graph, "pos") or graph.pos is None:
+            raise ValueError("< .encode_spatial > requires graph.pos.")
+
+        pos = graph.pos
+
+        if pos.ndim != 2 or pos.shape[1] != 3:
+            raise ValueError(f"Expected graph.pos with shape [num_atoms, 3], got {tuple(pos.shape)}.")
+
+        num_atoms = pos.shape[0]
+
+        if isinstance(cutoff, tuple):
+            r_on, r_off = cutoff
+            use_smooth_weights = True
+        else:
+            r_off = float(cutoff)
+            use_smooth_weights = False
+
+        if r_off <= 0:
+            raise ValueError(f"cutoff must be positive, got {r_off}.")
+
+        distance_matrix = torch.cdist(pos, pos, p=2)
+        spatial_mask = ((distance_matrix > 0.0) & (distance_matrix <= r_off))
+
+        if hasattr(graph, "edge_index") and graph.edge_index is not None:
+            edge_index = graph.edge_index.to(dtype=torch.long)
+
+            covalent_mask = torch.zeros((num_atoms, num_atoms), dtype=torch.bool)
+
+            src, dst = edge_index[0], edge_index[1]
+
+            covalent_mask[src, dst] = True
+            covalent_mask[dst, src] = True
+
+            spatial_mask = spatial_mask & ~covalent_mask
+
+        spatial_pairs = spatial_mask.nonzero(as_tuple=False)
+
+        if spatial_pairs.numel() == 0:
+            graph.spatial_edge_index = torch.empty((2, 0), dtype=torch.long)
+            graph.spatial_edge_dist = torch.empty((0,), dtype=torch.float32)
+            graph.spatial_edge_weight = torch.empty((0,), dtype=torch.float32)
+            return graph
+
+        spatial_edge_index = spatial_pairs.t().contiguous().to(torch.long)
+
+        spatial_edge_dist = distance_matrix[spatial_edge_index[0], spatial_edge_index[1]].to(torch.float32)
+
+        if use_smooth_weights:
+            spatial_edge_weight = self._cosine_smooth(distances=spatial_edge_dist, r_on=r_on, r_off=r_off)
+        else:
+            spatial_edge_weight = torch.ones_like(spatial_edge_dist)
+
+        graph.spatial_edge_index = spatial_edge_index
+        graph.spatial_edge_dist = spatial_edge_dist
+        graph.spatial_edge_weight = spatial_edge_weight
+        graph.spatial_edge_attr = self._gaussian_rbf(graph.spatial_edge_dist, r_off=r_off, n_rbf=n_rbf)
+
+        return graph
+
+    def encode_spatial(self, graph: Iterable[Graph], cutoff: float | Tuple[float, float], n_rbf: int = 32) -> List[Graph]:
+        """
+        Encode multiple 3D non-covalent spatial edges from graph.pos.
+
+        Parameters
+        ----------
+        graph: Iterable[Graph]
+            Graph objects prepared from `meth`:encode_deepmol that includes `pos`.
+        cutoff: float | Tuple[float, float]
+            If float: hard outer cutoff. All selected spatial edges get weight 1.0.
+            If tuple (r_on, r_off): Smooth transition region. Edges are generated up to r_off.
+                Edge weights are 1.0 up to r_on and smoothly decay to 0.0 at r_off.
+        n_rbf: int, optional
+            Number of Gaussian Radial Basis Functions to use for encoding distances
+
+        Adds
+        ----
+        graph.spatial_edge_index:
+            Long tensor of shape [2, E_spatial].
+        graph.spatial_edge_dist:
+            Float tensor of shape [E_spatial].
+        graph.spatial_edge_weight:
+            Float tensor of shape [E_spatial].
+        graph.spatial_edge_attr:
+            Float tensor of shape [E_spatial].
+        """
+
+        if isinstance(graph, Graph):
+            return [self.from_graph(graph, cutoff=cutoff, n_rbf=n_rbf)]
+
+        elif hasattr(graph, "__iter__") and all (isinstance(item, Graph) for item in graph):
+            return [self.from_graph(gr, cutoff=cutoff, n_rbf=n_rbf) for gr in graph]
+
+        else:
+            raise TypeError(f"Expected < graph > to be either Graph or Iterable[Graph], got {type(graph)} instead.")
+
+    def encode_many_spatial(self, graph: Iterable[Graph], cutoff: float | Tuple[float, float] = 4.0, n_rbf: int = 5,
+                            n_jobs: Optional[int] = 1, batch_size: Optional[int] = 256, timeout: int | None = None) -> List[Graph]:
+        """
+        Encode 3D non-covalent spatial edges from graph.pos in parallel
+
+        Parameters
+        ----------
+        graph: Graph
+            Graph object prepared from `meth`:encode_deepmol that includes `pos`.
+        cutoff: float | Tuple[float, float]
+            If float: hard outer cutoff. All selected spatial edges get weight 1.0.
+            If tuple (r_on, r_off): Smooth transition region. Edges are generated up to r_off.
+                Edge weights are 1.0 up to r_on and smoothly decay to 0.0 at r_off.
+        n_rbf: int, optional
+            Number of Gaussian Radial Basis Functions to use for encoding distances
+        n_jobs: int, optional
+            Number of cores to use for calculations.
+        batch_size: int, optional
+            Number of SMILES per batch.
+        timeout: int | None
+            Timeout per worker. Defaults to None, i.e., no timeout
+
+        Adds
+        ----
+        graph.spatial_edge_index:
+            Long tensor of shape [2, E_spatial].
+        graph.spatial_edge_dist:
+            Float tensor of shape [E_spatial].
+        graph.spatial_edge_weight:
+            Float tensor of shape [E_spatial].
+        graph.spatial_edge_attr:
+            Float tensor of shape [E_spatial].
+        """
+
+        graphs, n_jobs, graph_batches = self._prepare_batches(
+            graph, n_jobs, batch_size
+        )
+        if not graphs:
+            return []
+
+        out = Parallel(n_jobs=n_jobs, verbose=1, timeout=timeout, backend="loky")(
+            delayed(self.encode_spatial)(graph=gr, cutoff=cutoff, n_rbf=n_rbf) for gr in graph_batches)
+
+        return list(chain.from_iterable(out))
