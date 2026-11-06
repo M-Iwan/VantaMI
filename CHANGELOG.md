@@ -4,6 +4,8 @@
 - Automated directory building to IO functions
 - Zarr-backed datasets for Deep Learning
 - New module (vantami.dl.storage) for serializing supported modalities to Zarr
+- Parallel graph construction for GraphVectorizer
+- Parallel string tokenization for StringVectorizer
 
 [Updated]
 - Cleaned, added docstrings, and generally updated both vantami.dl.modules and vantami.dl.models/unit
@@ -14,6 +16,7 @@
 
 [Fixed]
 - Incorrect argument parsing in brier_score_loss (vantami.ml.models:ClassifierUnit)
+- joblib and pickle IO for pandas
 
 # [0.5.2]: 02-11-2026
 [Added]
