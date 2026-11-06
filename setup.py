@@ -7,9 +7,10 @@ README = ROOT / "README.md"
 package_data: dict[str, list[str]] = {
     "vantami": [
         "files/klekota_roth.joblib",
+        "files/unipka/aggregate_unipka.sh",
         "files/unipka/build_unipka.sh",
-        "files/unipka/test_unipka.sh",
         "files/unipka/prepare_unipka.sh",
+        "files/unipka/test_unipka.sh",
         "files/unipka/run_unipka.sh"
     ],
 }
