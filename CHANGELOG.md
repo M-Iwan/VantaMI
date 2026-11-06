@@ -6,6 +6,7 @@
 - New module (vantami.dl.storage) for serializing supported modalities to Zarr
 - Parallel graph construction for GraphVectorizer
 - Parallel string tokenization for StringVectorizer
+- Spatial encoding for GraphVectorizer
 
 [Updated]
 - Cleaned, added docstrings, and generally updated both vantami.dl.modules and vantami.dl.models/unit
