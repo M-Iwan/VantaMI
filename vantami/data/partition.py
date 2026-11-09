@@ -36,7 +36,16 @@ def bin_data(data: Iterable[float], n_bins: int = 5):
 
 def batch_data(data: Iterable[Any], n_jobs: int = 1, batch_size: int = 256):
     """
-    Prepare batches of SMILES strings, DeepMolecules, or Graphs for downstream processing.
+    Prepare batches of data for downstream processing.
+
+    Parameters
+    ----------
+    data: Iterable[Any]
+        E.g. list, 1D np.array, pd/pl.Series
+    n_jobs: int
+        Requested number of CPU cores to use
+    batch_size: int
+        Requested batch size
     """
     if batch_size < 1:
         raise ValueError(f"Batch size must be >= 1, got {batch_size} instead.")
@@ -61,7 +70,7 @@ def batch_data(data: Iterable[Any], n_jobs: int = 1, batch_size: int = 256):
             data_batches.append(data[start:start + current_size])
             start += current_size
 
-    return n_jobs, data_batches
+    return data, n_jobs, data_batches
 
 
 def validate_dataframe(df: pl.DataFrame, features_col: Optional[str] = None, target_col: Optional[str] = None,
