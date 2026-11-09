@@ -2,28 +2,42 @@ from __future__ import annotations
 
 from typing import Iterable, List, Optional, Tuple, Union
 
-import math
 import numpy as np
 import numpy.typing as npt
-from joblib import Parallel, delayed, effective_n_jobs
+from joblib import Parallel, delayed
 from itertools import chain
 
 try:
     from rdkit import Chem, RDLogger
     import torch
-    from torch_geometric.data import Data as Graph
-    from vantami.chem.molecule import DeepMolecule
+    from torch_geometric.data import Data
+    from torch.geometric.nn import radius_graph
+    from vantami.chem.molecule import Molecule, MMFFVariant, EnergyMethod, ChargeMethod
+    from vantami.data.partition import batch_data
 except ImportError as exc:
-    raise ImportError(f"GraphVectorizer requires rdkit, torch, and torch_geometric:\n{exc} ")
-
+    raise ImportError(f"GraphVectorizer requires rdkit, torch, torch_geometric, and torch_cluster") from exc
 
 import warnings
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
 
+class GaussianRBF(torch.nn.Module):
+    def __init__(self, r_off: float, n_rbf: int = 32):
+        super().__init__()
+
+        centers = torch.linspace(0.0, r_off, n_rbf)
+        spacing = r_off / (n_rbf - 1)
+
+        self.register_buffer("centers", centers)
+        self.gamma = 1.0 / (spacing ** 2)
+
+    def forward(self, distances: torch.Tensor) -> torch.Tensor:
+        return torch.exp(-self.gamma * (distances.unsqueeze(-1) - self.centers).pow(2))
+
+
 class GraphVectorizer:
     """
-    Turn SMILES or prepared DeepMolecule objects into torch_geometric Data.
+    Turn SMILES or prepared Molecule objects into torch_geometric Data.
 
     Node features contain atom descriptors, periodic table group, and a partial-charge feature.
     Edge features contain bond descriptors and 3D bond distance.
@@ -31,15 +45,15 @@ class GraphVectorizer:
     Updated in Vantami 0.5.3rc2
     """
 
-    def __init__(self, atom_encoding: dict = None, bond_encoding: dict = None, suppress: bool = True):
+    def __init__(self, atom_encoding: dict | None = None, bond_encoding: dict | None = None, suppress: bool = True):
         """
         Initialize the graph vectorizer with atom and bond encoding schemes.
 
         Parameters
         ----------
-        atom_encoding: Optional[dict]
+        atom_encoding: dict | None
             Mapping of atom symbols to integer encoding indices. If `None`, the default atom encoding is used.
-        bond_encoding: Optional[dict]
+        bond_encoding: dict | None
             Mapping of bond-type names to integer encoding indices. If `None`, the default bond encoding is used.
         suppress: bool
             Whether to suppress RDKit log messages.
@@ -74,15 +88,20 @@ class GraphVectorizer:
             for element in elements:
                 self.group_encoding[element] = group
 
-        self.atom_encoding_size = len(self.atom_encoding) + 1
-        self.group_encoding_size = len(self.groups) + 1
-
         if bond_encoding is None:
             self.bond_encoding = {"SINGLE": 0, "DOUBLE": 1, "TRIPLE": 2, "AROMATIC": 3}
         else:
             self.bond_encoding = bond_encoding
 
+        self.atom_encoding_size = len(self.atom_encoding) + 1
+        self.group_encoding_size = len(self.groups) + 1
         self.bond_encoding_size = len(self.bond_encoding) + 1
+
+        self.unk_atom_idx = len(self.atom_encoding)
+        self.unk_group_idx = len(self.groups)
+        self.unk_bond_idx = len(self.bond_encoding)
+
+        self.gaussian_rbf: GaussianRBF | None = None
 
         if suppress:
             RDLogger.DisableLog("rdApp.*")
@@ -103,11 +122,11 @@ class GraphVectorizer:
         npt.NDArray
         """
 
-        type_enc = np.zeros(shape=(self.atom_encoding_size), dtype=np.float32)
-        type_enc[self.atom_encoding.get(atom.GetSymbol(), -1)] = 1.0
+        type_enc = np.zeros(shape=self.atom_encoding_size, dtype=np.float32)
+        type_enc[self.atom_encoding.get(atom.GetSymbol(), self.unk_atom_idx)] = 1.0
 
-        group_enc = np.zeros(shape=(self.group_encoding_size), dtype=np.float32)
-        group_enc[self.group_encoding.get(atom.GetSymbol(), -1)] = 1.0
+        group_enc = np.zeros(shape=self.group_encoding_size, dtype=np.float32)
+        group_enc[self.group_encoding.get(atom.GetSymbol(), self.unk_group_idx)] = 1.0
 
         prop_enc = np.asarray(
             [
@@ -124,7 +143,7 @@ class GraphVectorizer:
 
         return np.hstack((type_enc, group_enc, prop_enc))
 
-    def encode_mol_atoms(self, mol: Chem.rdchem.Mol, charges: Optional[npt.NDArray] = None,
+    def encode_mol_atoms(self, mol: Chem.rdchem.Mol, charges: npt.NDArray | None = None,
                          heavy_only: bool = True) -> npt.NDArray:
         """
         Encode the atoms of an RDKit molecule as a feature matrix.
@@ -133,11 +152,8 @@ class GraphVectorizer:
         ----------
         mol: Chem.rdchem.Mol
             RDKit molecule containing the atoms to encode.
-
-        charges: Optional[npt.NDArray]
-            Partial charges corresponding to the selected atoms. If `None`, zero-valued
-            charges are used.
-
+        charges: npt.NDArray | None
+            Partial charges corresponding to the selected atoms. If `None`, zero-valued charges are used.
         heavy_only: bool
             Whether to include only heavy atoms, excluding hydrogen atoms.
 
@@ -184,8 +200,8 @@ class GraphVectorizer:
         bond_edges = [[start_idx, end_idx], [end_idx, start_idx]]
 
         bond_type = str(bond.GetBondType())
-        type_enc = np.zeros(shape=(self.bond_encoding_size), dtype=np.float32)
-        type_enc[self.bond_encoding.get(bond_type, -1)] = 1.0
+        type_enc = np.zeros(shape=self.bond_encoding_size, dtype=np.float32)
+        type_enc[self.bond_encoding.get(bond_type, self.unk_bond_idx)] = 1.0
 
         prop_enc = np.asarray(
             [
@@ -199,7 +215,7 @@ class GraphVectorizer:
 
         return bond_edges, np.hstack((type_enc, prop_enc))
 
-    def encode_mol_bonds(self, mol: Chem.rdchem.Mol, positions: Optional[npt.NDArray] = None,
+    def encode_mol_bonds(self, mol: Chem.rdchem.Mol, positions: npt.NDArray | None = None,
                          heavy_only: bool = False) -> Tuple[npt.NDArray, npt.NDArray]:
         """
         Encode the bonds of an RDKit molecule as graph edges and edge features.
@@ -208,7 +224,7 @@ class GraphVectorizer:
         ----------
         mol: Chem.rdchem.Mol
             RDKit molecule containing the bonds to encode.
-        positions: Optional[npt.NDArray]
+        positions: npt.NDArray | None
             Cartesian coordinates of the selected atoms, used to calculate bond distances.
             If `None`, bond distances are set to zero.
         heavy_only: bool
@@ -250,7 +266,7 @@ class GraphVectorizer:
 
         return np.asarray(edges, dtype=np.int64).T, np.vstack(encoding).astype(np.float32)
 
-    def from_smiles(self, smiles: str, heavy_only: bool = True) -> Graph:
+    def from_smiles(self, smiles: str, heavy_only: bool = True) -> Iterable:
         """
         Generate a PyTorch Geometric graph from a SMILES string.
 
@@ -263,7 +279,7 @@ class GraphVectorizer:
 
         Returns
         -------
-        Graph
+        Iterable
         """
 
         mol = Chem.MolFromSmiles(smiles, sanitize=True)
@@ -277,20 +293,21 @@ class GraphVectorizer:
             "edge_attr": torch.from_numpy(bonds_encoding_array),
         }
 
-        return Graph(**graph_data)
+        return Data(**graph_data)
 
-    def from_deepmol(self, deepmol: DeepMolecule, charge_method: str = "Gasteiger", energy_method: Optional[str] = None,
-                     heavy_only: bool = True, combine_hydrogens: bool = False, include_pos: bool = False) -> Graph:
+    def from_molecule(self, molecule: Molecule, charge_method: ChargeMethod = "Gasteiger",
+                      energy_method: EnergyMethod = "MMFF94", heavy_only: bool = True, combine_hydrogens: bool = False,
+                      include_pos: bool = False) -> Data:
         """
-        Generate a PyTorch Geometric graph from a prepared DeepMolecule object.
+        Generate a PyTorch Geometric graph from a prepared Molecule object.
 
         Parameters
         ----------
-        deepmol: DeepMolecule
+        molecule: Molecule
             Prepared molecule containing conformers and charge information.
-        charge_method: str
+        charge_method: ChargeMethod
             Method used to calculate or retrieve partial atomic charges.
-        energy_method: Optional[str]
+        energy_method: EnergyMethod
             Method used to select the lowest-energy conformer. If `None`, the default
             conformer-selection method is used.
         heavy_only: bool
@@ -298,22 +315,22 @@ class GraphVectorizer:
         combine_hydrogens: bool
             Whether to combine hydrogen charges with their associated heavy atoms.
         include_pos: bool
-            Whether to include atom positions in the Graph object.
+            Whether to include atom positions in the Data object.
 
         Returns
         -------
-        Graph
+        Data
         """
-        conf_id, _ = deepmol.get_lowest_energy_conformer(method=energy_method)
+        conf_id, _ = molecule.get_lowest_energy_conformer(method=energy_method)
 
-        charges = deepmol.get_charges(method=charge_method, conf_id=conf_id, heavy_only=heavy_only,
+        charges = molecule.get_charges(method=charge_method, conf_id=conf_id, heavy_only=heavy_only,
                                       combine_hydrogens=combine_hydrogens)
 
-        positions = deepmol.get_conformer_positions(conf_id=conf_id, heavy_only=heavy_only)
+        positions = molecule.get_conformer_positions(conf_id=conf_id, heavy_only=heavy_only)
 
-        atoms_encoding_array = self.encode_mol_atoms(mol=deepmol.mol, charges=charges, heavy_only=heavy_only)
+        atoms_encoding_array = self.encode_mol_atoms(mol=molecule.mol, charges=charges, heavy_only=heavy_only)
 
-        edges_array, bonds_encoding_array = self.encode_mol_bonds(mol=deepmol.mol, positions=positions,
+        edges_array, bonds_encoding_array = self.encode_mol_bonds(mol=molecule.mol, positions=positions,
                                                                   heavy_only=heavy_only)
 
         graph_data = {
@@ -325,40 +342,9 @@ class GraphVectorizer:
         if include_pos:
             graph_data["pos"] = torch.from_numpy(positions).to(torch.float32)
 
-        return Graph(**graph_data)
+        return Data(**graph_data)
 
-    @staticmethod
-    def _prepare_batches(data: Union[Iterable[str], Iterable[DeepMolecule], Iterable[Graph]], n_jobs: int = 1,
-                         batch_size: int = 256):
-        """
-        Prepare batches of SMILES strings, DeepMolecules, or Graphs for downstream processing.
-        """
-        if batch_size < 1:
-            raise ValueError(f"Batch size must be >= 1, got {batch_size} instead.")
-
-        data = list(data)
-
-        if not data:
-            return data, 0, []
-
-        n_jobs = min(effective_n_jobs(n_jobs), len(data))
-        n_batches = max(n_jobs, math.ceil(len(data) / batch_size))
-
-        base_size, remainder = divmod(len(data), n_batches)
-
-        data_batches = []
-        start = 0
-
-        for batch_idx in range(n_batches):
-            current_size = base_size + (batch_idx < remainder)
-
-            if current_size:
-                data_batches.append(data[start:start + current_size])
-                start += current_size
-
-        return data, n_jobs, data_batches
-
-    def encode_smiles(self, smiles: str | Iterable[str], heavy_only: bool = True) -> List[Graph]:
+    def encode_smiles(self, smiles: str | Iterable[str], heavy_only: bool = True) -> List[Iterable]:
         """
         Convert one or multiple SMILES strings into PyTorch Geometric graphs.
 
@@ -371,7 +357,7 @@ class GraphVectorizer:
 
         Returns
         -------
-        List[Graph]
+        List[Iterable]
         """
         if isinstance(smiles, str):
             return [self.from_smiles(smiles, heavy_only=heavy_only)]
@@ -383,7 +369,7 @@ class GraphVectorizer:
             raise TypeError(f"Expected < smiles > to be either str or Iterable[str], got {type(smiles)} instead.")
 
     def encode_many_smiles(self, smiles: Iterable[str], heavy_only: bool = True, n_jobs: int = 1,
-                           batch_size: int = 256, timeout: int | None = None) -> List[Graph]:
+                           batch_size: int = 256, timeout: int | None = None) -> List[Data]:
         """
         Convert multiple SMILES strings into PyTorch Geometric graphs in parallel.
 
@@ -402,12 +388,10 @@ class GraphVectorizer:
 
         Returns
         -------
-        List[Graph]
+        List[Data]
         """
 
-        smiles, n_jobs, smiles_batches = self._prepare_batches(
-            smiles, n_jobs, batch_size
-        )
+        smiles, n_jobs, smiles_batches = batch_data(data=smiles, n_jobs=n_jobs, batch_size=batch_size)
         if not smiles:
             return []
 
@@ -417,76 +401,76 @@ class GraphVectorizer:
 
         return list(chain.from_iterable(out))
 
-    def encode_deepmol(self, deepmol: Union[DeepMolecule, Iterable[DeepMolecule]], charge_method: str = "Gasteiger",
-                       energy_method: Optional[str] = None, heavy_only: bool = True, combine_hydrogens: bool = False,
-                       include_pos: bool = False) -> List[Graph]:
+    def encode_molecules(self, molecule: Molecule | Iterable[Molecule], charge_method: ChargeMethod = "Gasteiger",
+                         energy_method: EnergyMethod = "MMFF94", heavy_only: bool = True, combine_hydrogens: bool = False,
+                         include_pos: bool = False) -> List[Data]:
         """
-        Convert one or more prepared DeepMolecule objects into graph representations.
+        Convert one or more prepared Molecule objects into graph representations.
 
         Parameters
         ----------
-        deepmol: Union[DeepMolecule, Iterable[DeepMolecule]]
-            A single prepared DeepMolecule object or an iterable of DeepMolecule objects to encode.
-        charge_method: str
+        molecule: Molecule | Iterable[Molecule]
+            A single prepared Molecule object or an iterable of Molecule objects to encode.
+        charge_method: ChargeMethod
             Method used to calculate or retrieve partial atomic charges.
-        energy_method: Optional[str]
+        energy_method: EnergyMethod
             Method used to select the lowest-energy conformer. If `None`, the default conformer-selection method is used.
         heavy_only: bool
             Whether to include only heavy atoms and bonds between heavy atoms.
         combine_hydrogens: bool
             Whether to combine hydrogen charges with their associated heavy atoms.
         include_pos: bool
-            Whether to include atom positions in the Graph object.
+            Whether to include atom positions in the Data object.
 
         Returns
         -------
-        List[Graph]
+        List[Data]
         """
 
         try:
-            from vantami.chem.molecule import DeepMolecule
+            from vantami.chem.molecule import Molecule
         except ImportError as exc:
-            raise ImportError(f"Method < encode_deepmol > requires < vantami > 0.5.2 or higher.") from exc
-        if isinstance(deepmol, DeepMolecule):
+            raise ImportError(f"Method < encode_molecules > requires < vantami > 0.5.2 or higher.") from exc
+        if isinstance(molecule, Molecule):
             return [
-                self.from_deepmol(deepmol, charge_method=charge_method, energy_method=energy_method,
-                                  heavy_only=heavy_only, combine_hydrogens=combine_hydrogens,
-                                  include_pos=include_pos),
+                self.from_molecule(molecule, charge_method=charge_method, energy_method=energy_method,
+                                   heavy_only=heavy_only, combine_hydrogens=combine_hydrogens,
+                                   include_pos=include_pos),
             ]
 
-        elif hasattr(deepmol, "__iter__") and all (isinstance(item, DeepMolecule) for item in deepmol):
+        elif hasattr(molecule, "__iter__") and all(isinstance(item, Molecule) for item in molecule):
             return [
-                self.from_deepmol(dm, charge_method=charge_method, energy_method=energy_method,
-                                  heavy_only=heavy_only, combine_hydrogens=combine_hydrogens,
-                                  include_pos=include_pos)
-                for dm in deepmol
+                self.from_molecule(dm, charge_method=charge_method, energy_method=energy_method,
+                                   heavy_only=heavy_only, combine_hydrogens=combine_hydrogens,
+                                   include_pos=include_pos)
+                for dm in molecule
             ]
 
         else:
-            raise TypeError(f"Expected < deepmol > to be either DeepMolecule or Iterable[DeepMolecule],"
-                            f"got {type(deepmol)} instead.")
+            raise TypeError(f"Expected < molecule > to be either Molecule or Iterable[Molecule],"
+                            f"got {type(molecule)} instead.")
 
-    def encode_many_deepmol(self, deepmol: Iterable[DeepMolecule], charge_method: str = "Gasteiger",
-                            energy_method: Optional[str] = None, heavy_only: bool = True, combine_hydrogens: bool = False,
-                            include_pos: bool = False, n_jobs: int = 1, batch_size: int = 256,
-                            timeout: int | None = None) -> List[Graph]:
+    def encode_many_molecules(self, molecule: Iterable[Molecule], charge_method: ChargeMethod = "Gasteiger",
+                              energy_method: EnergyMethod = "MMFF94", heavy_only: bool = True, combine_hydrogens: bool = False,
+                              include_pos: bool = False, n_jobs: int = 1, batch_size: int = 256,
+                              timeout: int | None = None) -> List[Data]:
         """
-        Convert multiple DeepMolecules into PyTorch Geometric graphs in parallel.
+        Convert multiple Molecules into PyTorch Geometric graphs in parallel.
 
         Parameters
         ----------
-        deepmol: Iterable[DeepMolecule]
-            Prepared DeepMolecule objects.
-        charge_method: str
+        molecule: Iterable[Molecule]
+            Prepared Molecule objects.
+        charge_method: ChargeMethod
             Method used to calculate or retrieve partial atomic charges.
-        energy_method: Optional[str]
+        energy_method: EnergyMethod
             Method used to select the lowest-energy conformer. If `None`, the default conformer-selection method is used.
         heavy_only: bool
             Whether to include only heavy atoms and bonds between heavy atoms.
         combine_hydrogens: bool
             Whether to combine hydrogen charges with their associated heavy atoms.
         include_pos: bool
-            Whether to include atom positions in the Graph object.
+            Whether to include atom positions in the Data object.
         n_jobs: int, optional
             Number of cores to use for calculations.
         batch_size: int, optional
@@ -496,24 +480,21 @@ class GraphVectorizer:
 
         Returns
         -------
-        List[Graph]
+        List[Data]
         """
 
-        deepmols, n_jobs, deepmol_batches = self._prepare_batches(
-            deepmol, n_jobs, batch_size
-        )
-        if not deepmols:
+        molecules, n_jobs, molecule_batches = batch_data(data=molecule, n_jobs=n_jobs, batch_size=batch_size)
+        if not molecules:
             return []
 
         out = Parallel(n_jobs=n_jobs, verbose=1, timeout=timeout, backend="loky")(
-            delayed(self.encode_deepmol)(
-                deepmol=dm, charge_method=charge_method, energy_method=energy_method, heavy_only=heavy_only,
+            delayed(self.encode_molecules)(
+                molecule=dm, charge_method=charge_method, energy_method=energy_method, heavy_only=heavy_only,
                 combine_hydrogens=combine_hydrogens, include_pos=include_pos
-            ) for dm in deepmol_batches
+            ) for dm in molecule_batches
         )
 
         return list(chain.from_iterable(out))
-
 
     @staticmethod
     def _cosine_smooth(distances: torch.Tensor, r_on: float = 4.0, r_off: float = 6.0):
@@ -529,32 +510,23 @@ class GraphVectorizer:
 
         return weights
 
-    @staticmethod
-    def _gaussian_rbf(distances: torch.Tensor, r_off: float, n_rbf: int = 32) -> torch.Tensor:
-        """
-        Encode spatial distances into a Gaussian RBF
-        """
-        centers = torch.linspace(0.0, r_off, n_rbf, dtype=distances.dtype)
-
-        spacing = r_off / (n_rbf - 1)
-        gamma = 1.0 / (spacing ** 2)
-
-        return torch.exp(-gamma * (distances.unsqueeze(-1) - centers).pow(2))
-
-    def from_graph(self, graph: Graph, cutoff: float | Tuple[float, float], n_rbf: int = 32) -> Graph:
+    def from_graph(self, graph: Data, cutoff: float | Tuple[float, float], n_rbf: int = 32,
+                   max_neighbors: int = 64) -> Data:
         """
         Encode 3D non-covalent spatial edges from graph.pos
 
         Parameters
         ----------
-        graph: Graph
-            Graph object prepared from `meth`:encode_deepmol that includes `pos`.
+        graph: Data
+            Data object prepared from `meth`:encode_molecules that includes `pos`.
         cutoff: float | Tuple[float, float]
             If float: hard outer cutoff. All selected spatial edges get weight 1.0.
             If tuple (r_on, r_off): Smooth transition region. Edges are generated up to r_off.
                 Edge weights are 1.0 up to r_on and smoothly decay to 0.0 at r_off.
         n_rbf: int, optional
             Number of Gaussian Radial Basis Functions to use for encoding distances
+        max_neighbors: int
+            Maximum number of encoded neighbors
 
         Adds
         ----
@@ -576,34 +548,58 @@ class GraphVectorizer:
         if pos.ndim != 2 or pos.shape[1] != 3:
             raise ValueError(f"Expected graph.pos with shape [num_atoms, 3], got {tuple(pos.shape)}.")
 
-        num_atoms = pos.shape[0]
-
         if isinstance(cutoff, tuple):
-            r_on, r_off = cutoff
+            r_on, r_off = map(float, cutoff)
+            if not 0.0 <= r_on < r_off:
+                raise ValueError("cutoff must satisfy 0 <= r_on < r_off.")
             use_smooth_weights = True
         else:
-            r_off = float(cutoff)
+            r_on, r_off = None, float(cutoff)
+            if r_off <= 0:
+                raise ValueError(f"cutoff must be positive, got {r_off}.")
             use_smooth_weights = False
 
-        if r_off <= 0:
-            raise ValueError(f"cutoff must be positive, got {r_off}.")
+        if self.gaussian_rbf is None:
+            self.gaussian_rbf = GaussianRBF(
+                r_off=r_off,
+                n_rbf=n_rbf,
+            )
 
-        distance_matrix = torch.cdist(pos, pos, p=2)
-        spatial_mask = ((distance_matrix > 0.0) & (distance_matrix <= r_off))
+        candidate_edge_index = radius_graph(
+            x=pos,
+            r=r_off,
+            batch=None,
+            loop=False,
+            max_num_neighbors=max_neighbors,
+        )
+
+        if candidate_edge_index.numel() == 0:
+            graph.spatial_edge_index = torch.empty((2, 0), dtype=torch.long, device=pos.device)
+            graph.spatial_edge_dist = torch.empty((0,), dtype=torch.float32, device=pos.device)
+            graph.spatial_edge_weight = torch.empty((0,), dtype=torch.float32, device=pos.device)
+            graph.spatial_edge_attr = torch.empty((0, n_rbf), dtype=torch.float32, device=pos.device)
+            return graph
+
+        src, dst = candidate_edge_index
 
         if hasattr(graph, "edge_index") and graph.edge_index is not None:
-            edge_index = graph.edge_index.to(dtype=torch.long)
+            num_atoms = pos.size(0)
+            covalent_adjacency = torch.zeros(
+                (num_atoms, num_atoms),
+                dtype=torch.bool,
+                device=pos.device,
+            )
 
-            covalent_mask = torch.zeros((num_atoms, num_atoms), dtype=torch.bool)
+            cov_src = graph.edge_index[0].to(device=pos.device, dtype=torch.long)
+            cov_dst = graph.edge_index[1].to(device=pos.device, dtype=torch.long)
 
-            src, dst = edge_index[0], edge_index[1]
+            covalent_adjacency[cov_src, cov_dst] = True
+            covalent_adjacency[cov_dst, cov_src] = True
 
-            covalent_mask[src, dst] = True
-            covalent_mask[dst, src] = True
-
-            spatial_mask = spatial_mask & ~covalent_mask
-
-        spatial_pairs = spatial_mask.nonzero(as_tuple=False)
+            keep = ~covalent_adjacency[src, dst]
+            spatial_edge_index = candidate_edge_index[:, keep]
+        else:
+            spatial_edge_index = candidate_edge_index
 
         if spatial_pairs.numel() == 0:
             graph.spatial_edge_index = torch.empty((2, 0), dtype=torch.long)
@@ -612,9 +608,8 @@ class GraphVectorizer:
             graph.spatial_edge_attr = torch.empty((0, n_rbf), dtype=torch.float32)
             return graph
 
-        spatial_edge_index = spatial_pairs.t().contiguous().to(torch.long)
-
-        spatial_edge_dist = distance_matrix[spatial_edge_index[0], spatial_edge_index[1]].to(torch.float32)
+        src, dst = spatial_edge_index
+        spatial_edge_dist = (pos[src] - pos[dst]).norm(dim=-1)
 
         if use_smooth_weights:
             spatial_edge_weight = self._cosine_smooth(distances=spatial_edge_dist, r_on=r_on, r_off=r_off)
@@ -624,18 +619,19 @@ class GraphVectorizer:
         graph.spatial_edge_index = spatial_edge_index
         graph.spatial_edge_dist = spatial_edge_dist
         graph.spatial_edge_weight = spatial_edge_weight
-        graph.spatial_edge_attr = self._gaussian_rbf(graph.spatial_edge_dist, r_off=r_off, n_rbf=n_rbf)
+        graph.spatial_edge_attr = self.gaussian_rbf(spatial_edge_dist)
 
         return graph
 
-    def encode_spatial(self, graph: Iterable[Graph], cutoff: float | Tuple[float, float], n_rbf: int = 32) -> List[Graph]:
+    def encode_spatial(self, graph: Iterable[Data], cutoff: float | Tuple[float, float],
+                       n_rbf: int = 32) -> List[Data]:
         """
         Encode multiple 3D non-covalent spatial edges from graph.pos.
 
         Parameters
         ----------
-        graph: Iterable[Graph]
-            Graph objects prepared from `meth`:encode_deepmol that includes `pos`.
+        graph: Iterable[Data]
+            Data objects prepared from `meth`:encode_molecules that includes `pos`.
         cutoff: float | Tuple[float, float]
             If float: hard outer cutoff. All selected spatial edges get weight 1.0.
             If tuple (r_on, r_off): Smooth transition region. Edges are generated up to r_off.
@@ -655,33 +651,33 @@ class GraphVectorizer:
             Float tensor of shape [E_spatial].
         """
 
-        if isinstance(graph, Graph):
+        if isinstance(graph, Data):
             return [self.from_graph(graph, cutoff=cutoff, n_rbf=n_rbf)]
 
-        elif hasattr(graph, "__iter__") and all (isinstance(item, Graph) for item in graph):
+        elif hasattr(graph, "__iter__") and all(isinstance(item, Data) for item in graph):
             return [self.from_graph(gr, cutoff=cutoff, n_rbf=n_rbf) for gr in graph]
 
         else:
-            raise TypeError(f"Expected < graph > to be either Graph or Iterable[Graph], got {type(graph)} instead.")
+            raise TypeError(f"Expected < graph > to be either Data or Iterable[Data], got {type(graph)} instead.")
 
-    def encode_many_spatial(self, graph: Iterable[Graph], cutoff: float | Tuple[float, float] = 4.0, n_rbf: int = 5,
-                            n_jobs: Optional[int] = 1, batch_size: Optional[int] = 256, timeout: int | None = None) -> List[Graph]:
+    def encode_many_spatial(self, graph: Iterable[Data], cutoff: float | Tuple[float, float] = 4.0, n_rbf: int = 5,
+                            n_jobs: int = 1, batch_size: int = 256, timeout: int | None = None) -> List[Data]:
         """
         Encode 3D non-covalent spatial edges from graph.pos in parallel
 
         Parameters
         ----------
-        graph: Graph
-            Graph object prepared from `meth`:encode_deepmol that includes `pos`.
+        graph: Data
+            Data object prepared from `meth`:encode_molecules that includes `pos`.
         cutoff: float | Tuple[float, float]
             If float: hard outer cutoff. All selected spatial edges get weight 1.0.
             If tuple (r_on, r_off): Smooth transition region. Edges are generated up to r_off.
                 Edge weights are 1.0 up to r_on and smoothly decay to 0.0 at r_off.
         n_rbf: int, optional
             Number of Gaussian Radial Basis Functions to use for encoding distances
-        n_jobs: int, optional
+        n_jobs: int
             Number of cores to use for calculations.
-        batch_size: int, optional
+        batch_size: int
             Number of SMILES per batch.
         timeout: int | None
             Timeout per worker. Defaults to None, i.e., no timeout
@@ -697,10 +693,8 @@ class GraphVectorizer:
         graph.spatial_edge_attr:
             Float tensor of shape [E_spatial].
         """
+        graphs, n_jobs, graph_batches = batch_data(data=graph, n_jobs=n_jobs, batch_size=batch_size)
 
-        graphs, n_jobs, graph_batches = self._prepare_batches(
-            graph, n_jobs, batch_size
-        )
         if not graphs:
             return []
 
