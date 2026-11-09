@@ -16,7 +16,7 @@ update to a specific module.
 
 ### Repository Structure
 
-Current version: 0.5.3
+Current version: 0.5.3rc3
 
 ```
 vantami/
@@ -29,7 +29,8 @@ vantami/
 │   │   ├── convert.py             Conversion from IUPAC names to SMILES using OPSIN
 │   │   └── resolve.py             Get SMILES from name using PubChem, CIR, or (WIP) CAS
 │   ├── chemistry/
-│   │   └── molecule.py            Standardize molecule, embed it in 3D, and dock using SMINA
+│   │   ├── manager.py             Dedicated class for managing conformer searches
+│   │   └── molecule.py            Conformer generation and optimization + docking / PLIF
 │   ├── cli/
 │   │   ├── CDDD.py                CLI wrapper for CDDD descriptors
 │   │   ├── CIR.py                 CLI wrapper of CIR name resolver
@@ -98,7 +99,6 @@ vantami/
 │       └── lmm.R                  Linear Mixed Models code
 ├── projects/
 │   ├── cddd_setup                 Files for setting up CDDD environment anywhere
-│   ├── osmordred_setup            WIP: Corrected Mordred descriptors
 │   └── qcg_template               Template for QCG PilotJob training on bigger scale (one node)
 ├── temp/           
 ├── tests/          
