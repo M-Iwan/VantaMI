@@ -8,7 +8,6 @@ import re
 import shutil
 import subprocess
 import warnings
-from abc import ABC
 from pathlib import Path
 from typing import Any, Literal
 
@@ -37,7 +36,7 @@ EnergyMethod = Literal["MMFF94", "MMFF94s", "UFF", "GFN2-xTB"]
 ChargeMethod = Literal["Gasteiger", "MMFF94", "MMFF94s", "GFN2-xTB"]
 
 
-class Molecule(ABC):
+class Molecule:
     """
     Shared RDKit molecule preparation functionality.
     """
@@ -626,7 +625,8 @@ class Molecule(ABC):
         self.lowest_energy_method = selected_method
         return lowest_conf_id, lowest_energy
 
-    def retain_lowest_energy_conformer(self, method: EnergyMethod = "MMFF94", *, keep_global_charge_sets: bool = True) -> tuple[int, float]:
+    def retain_lowest_energy_conformer(self, method: EnergyMethod = "MMFF94", *,
+                                       keep_global_charge_sets: bool = True) -> tuple[int, float]:
         """
         Retain only the lowest-energy conformer.
 
@@ -699,7 +699,8 @@ class Molecule(ABC):
 
         return conf_id, float(energy)
 
-    def optimize_mmff(self, conf_id: int = -1, variant: MMFFVariant = "MMFF94", max_iterations: int = 1024) -> tuple[float, bool]:
+    def optimize_mmff(self, conf_id: int = -1, variant: MMFFVariant = "MMFF94",
+                      max_iterations: int = 1024) -> tuple[float, bool]:
         """
         Optimize a conformer with MMFF.
 
