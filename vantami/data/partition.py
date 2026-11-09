@@ -353,7 +353,7 @@ def random_kfold_split(df: pl.DataFrame, n_folds: int = 5, seed: int = 42):
     try:
         from sklearn.model_selection import KFold
     except ImportError as exc:
-        raise ImportError(f"Function < random_kfold_split > requires <scikit-learn>") from exc
+        raise ImportError(f"Function < random_kfold_split > requires < scikit-learn >") from exc
 
     kf = KFold(n_splits=n_folds, shuffle=True, random_state=seed)
 
@@ -389,7 +389,7 @@ def stratified_kfold_split(df: pl.DataFrame, strat_col: str, n_folds: int = 5, s
     try:
         from sklearn.model_selection import StratifiedKFold
     except ImportError as exc:
-        raise ImportError(f"Function < stratified_kfold_split > requires <scikit-learn>") from exc
+        raise ImportError(f"Function < stratified_kfold_split > requires < scikit-learn >") from exc
 
     skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
     df = collate_strat(df=df, strat_col=strat_col).with_columns(pl.lit(-1).alias("Fold"))
@@ -426,7 +426,7 @@ def group_kfold_split(df: pl.DataFrame, cluster_col: str, n_folds: int = 5, seed
     try:
         from sklearn.model_selection import GroupKFold
     except ImportError as exc:
-        raise ImportError(f"Function < group_kfold_split > requires <scikit-learn>") from exc
+        raise ImportError(f"Function < group_kfold_split > requires < scikit-learn >") from exc
 
     gkf = GroupKFold(n_splits=n_folds, shuffle=True, random_state=seed)
     df = df.with_columns(pl.lit(-1).alias("Fold"))
