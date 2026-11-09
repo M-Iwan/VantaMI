@@ -41,7 +41,8 @@ class Molecule(ABC):
     """
     Shared RDKit molecule preparation functionality.
     """
-    def __init__(self, smiles: str, id: str | None = None):
+
+    def __init__(self, smiles: str, id: int | str):
         """
         Initialize a molecule from SMILES.
 
@@ -57,8 +58,11 @@ class Molecule(ABC):
         if mol is None:
             raise ValueError(f"Invalid SMILES: {smiles}")
 
+        if not isinstance(id, (int, str)):
+            raise TypeError(f"ID must be an int or str: {id}")
+
         self.smiles = smiles
-        self.id = str(id) if id is not None else smiles
+        self.id = id
         self.mol = mol
         self.energy: float | None = None
         self.energy_method: EnergyMethod | None = None
@@ -538,7 +542,9 @@ class Molecule(ABC):
         self._clear_calculation_results()
         return conformer_ids
 
-    def lowest_energy_conformer(self, n_conformers: int = 16, method: EnergyMethod = "MMFF94s", seed: int = 42, prune_threshold: float = 0.25, max_iterations: int = 1024, charge: int | None = None, uhf: int | None = None) -> tuple[int, float]:
+    def lowest_energy_conformer(self, n_conformers: int = 16, method: EnergyMethod = "MMFF94", seed: int = 42,
+                                prune_threshold: float = 0.25, max_iterations: int = 1024, charge: int | None = None,
+                                uhf: int | None = None) -> tuple[int, float]:
         """
         Generate and optimize conformers.
 
@@ -620,13 +626,13 @@ class Molecule(ABC):
         self.lowest_energy_method = selected_method
         return lowest_conf_id, lowest_energy
 
-    def retain_lowest_energy_conformer(self, method: EnergyMethod | None = None, *, keep_global_charge_sets: bool = True) -> tuple[int, float]:
+    def retain_lowest_energy_conformer(self, method: EnergyMethod = "MMFF94", *, keep_global_charge_sets: bool = True) -> tuple[int, float]:
         """
         Retain only the lowest-energy conformer.
 
         Parameters
         ----------
-        method: EnergyMethod or None
+        method: EnergyMethod
             Energy method used for conformer selection.
         keep_global_charge_sets: bool
             Whether to retain conformer-independent charges.
@@ -693,7 +699,7 @@ class Molecule(ABC):
 
         return conf_id, float(energy)
 
-    def optimize_mmff(self, conf_id: int = -1, variant: MMFFVariant = "MMFF94s", max_iterations: int = 1024) -> tuple[float, bool]:
+    def optimize_mmff(self, conf_id: int = -1, variant: MMFFVariant = "MMFF94", max_iterations: int = 1024) -> tuple[float, bool]:
         """
         Optimize a conformer with MMFF.
 
@@ -790,7 +796,7 @@ class Molecule(ABC):
         self.n_optimized += 1
         return energy, converged
 
-    def optimize(self, conf_id: int = -1, method: EnergyMethod = "MMFF94s", max_iterations: int = 1024,
+    def optimize(self, conf_id: int = -1, method: EnergyMethod = "MMFF94", max_iterations: int = 1024,
                  charge: int | None = None, uhf: int | None = None) -> tuple[float, EnergyMethod, bool]:
         """
         Optimize a conformer.
@@ -824,7 +830,7 @@ class Molecule(ABC):
 
         return energy, method, converged
 
-    def get_mmff_energy(self, conf_id: int = -1, variant: MMFFVariant = "MMFF94s") -> float:
+    def get_mmff_energy(self, conf_id: int = -1, variant: MMFFVariant = "MMFF94") -> float:
         """
         Calculate MMFF conformer energy.
 
@@ -879,7 +885,8 @@ class Molecule(ABC):
 
         return self._store_energy(energy=force_field.CalcEnergy(), method="UFF", conf_id=conf_id)
 
-    def get_xtb_energy(self, conf_id: int = -1, charge: int | None = None, uhf: int | None = None, method: str = "GFN2-xTB") -> float:
+    def get_xtb_energy(self, conf_id: int = -1, charge: int | None = None, uhf: int | None = None,
+                       method: str = "GFN2-xTB") -> float:
         """
         Calculate xTB conformer energy.
 
@@ -969,7 +976,7 @@ class Molecule(ABC):
         )
         return self._store_charges(charges=charges, method="Gasteiger")
 
-    def get_mmff_charges(self, variant: MMFFVariant = "MMFF94s") -> npt.NDArray[np.float32]:
+    def get_mmff_charges(self, variant: MMFFVariant = "MMFF94") -> npt.NDArray[np.float32]:
         """
         Calculate MMFF charges.
 
@@ -1000,7 +1007,8 @@ class Molecule(ABC):
         )
         return self._store_charges(charges=charges, method=variant, conf_id=None)
 
-    def get_xtb_charges(self, conf_id: int = -1, charge: int | None = None, uhf: int | None = None, method: str = "GFN2-xTB") -> npt.NDArray[np.float32]:
+    def get_xtb_charges(self, conf_id: int = -1, charge: int | None = None, uhf: int | None = None,
+                        method: str = "GFN2-xTB") -> npt.NDArray[np.float32]:
         """
         Calculate xTB Mulliken charges.
 
@@ -1034,7 +1042,8 @@ class Molecule(ABC):
 
         return charges
 
-    def get_charges(self, method: ChargeMethod = "Gasteiger", conf_id: int = -1, heavy_only: bool = True, combine_hydrogens: bool = False) -> npt.NDArray[np.float32]:
+    def get_charges(self, method: ChargeMethod = "Gasteiger", conf_id: int = -1, heavy_only: bool = True,
+                    combine_hydrogens: bool = False) -> npt.NDArray[np.float32]:
         """
         Return partial atomic charges.
 
