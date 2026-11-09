@@ -4,6 +4,7 @@ from itertools import chain
 from typing import Union, List, Iterable
 from importlib.resources import files
 from joblib import Parallel, delayed
+import warnings
 
 import numpy as np
 import numpy.typing as npt
@@ -1405,27 +1406,43 @@ def dataframe_2_mapc(df: pl.DataFrame, smiles_col: str = "SMILES", output_col: s
     return df
 
 
-def _to_mordred(smiles: str, calc):
+def _mordred_to_array(result) -> npt.NDArray:
+    return np.asarray(
+        [float(value) if np.isscalar(value) else np.nan for value in result],
+        dtype=np.float64
+    )
+
+
+def _to_mordred_2D(smiles: str, calc):
     """
-    Convert a single SMILES to Mordred descriptors.
+    Convert a single SMILES to 2D Mordred descriptors.
     """
     if (mol := _to_mol(smiles)) is None:
         print(f"Unable to construct valid molecule from {smiles}")
         return None
 
-    return np.array(calc(mol), dtype=np.float64)
+    return _mordred_to_array(calc(mol))
 
 
-def smiles_2_mordred(smiles: str | Iterable[str], ignore_3D: bool = True):
+def _to_mordred_3D(mol: Chem.Mol, calc):
+    """
+    Convert a single RDKit Mol to 3D Mordred descriptors.
+    """
+    if mol.GetNumConformers() == 0:
+        warnings.warn(f"3D Mordred descriptors require at least one conformer with 3D coordinates. "
+                      f"Found None for {Chem.MolToSmiles(mol)}")
+        return np.array([np.nan] * 1826)
+    return _mordred_to_array(calc(mol))
+
+
+def smiles_2_mordred(smiles: str | Iterable[str]):
     """
     Convert SMILES to Mordred descriptors.
 
     Parameters
     ----------
     smiles: str | Iterable[str]
-        A valid SMILES or list of valid SMILES strings.
-    ignore_3D: Optional[bool]
-        Whether to ignore 3D descriptors.
+        Valid SMILES or list of SMILES
 
     Returns
     -------
@@ -1443,19 +1460,56 @@ def smiles_2_mordred(smiles: str | Iterable[str], ignore_3D: bool = True):
     except ImportError as exc:
         raise ImportError(f"Function < smiles_2_mordred > requires < mordredcommunity, networkx > libraries:\n{exc}")
 
-    calc = Calculator(descriptors, ignore_3D=ignore_3D)
+    calc = Calculator(descriptors, ignore_3D=True)
 
     if isinstance(smiles, str):
-        return _to_mordred(smiles=smiles, calc=calc)
+        return _to_mordred_2D(smiles=smiles, calc=calc)
 
     elif isinstance(smiles, (list, np.ndarray)):
-        return [_to_mordred(smiles=smi, calc=calc) for smi in smiles]
+        return [_to_mordred_2D(smiles=smi, calc=calc) for smi in smiles]
 
     else:
         raise TypeError(f"Expected smiles to be str or Union[List[str], npt.NDArray[str]], got {type(smiles)} instead")
 
 
-def dataframe_2_mordred(df: pl.DataFrame, smiles_col: str = "SMILES", output_col: str = "Mordred",
+def mol_2_mordred(mol: Chem.Mol | Iterable[Chem.Mol]):
+    """
+    Convert RDKit Mols to Mordred descriptors.
+
+    Parameters
+    ----------
+    mol: Chem.Mol | Iterable[Chem.Mol]
+        Valid Mol or list of Mols
+
+    Returns
+    -------
+    npt.NDArray | List[npt.NDArray]
+
+    Notes
+    -----
+    [1] From paper: H. Moriwaki et al. "Mordred: a molecular descriptor calculator",
+        Journal of Cheminformatics, vol. 10, art. 4 (2018), https://doi.org/10.1186/s13321-018-0258-y
+    [2] Original implementation: https://github.com/mordred-descriptor/mordred
+    [3] Implementation: https://github.com/JacksonBurns/mordred-community
+    """
+    try:
+        from mordred import Calculator, descriptors
+    except ImportError as exc:
+        raise ImportError(f"Function < mol_2_mordred > requires < mordredcommunity, networkx > libraries:\n{exc}")
+
+    calc = Calculator(descriptors, ignore_3D=False)
+
+    if isinstance(mol, Chem.Mol):
+        return _to_mordred_3D(mol=mol, calc=calc)
+
+    elif isinstance(mol, (list, np.ndarray)):
+        return [_to_mordred_3D(mol=ml, calc=calc) for ml in mol]
+
+    else:
+        raise TypeError(f"Expected < mol > to be Chem.Mol or Iterable[Chem.Mol], got {type(mol)} instead")
+
+
+def dataframe_2_mordred(df: pl.DataFrame, smiles_col: str = "SMILES", mol_col: str = "Mol", output_col: str = "Mordred",
                         ignore_3D: bool = True, n_jobs: int = 1, batch_size: int = 512, timeout: int | None = None):
     """
     Convert SMILES in a DataFrame to MAPC (MAP Chiral) fingerprints.
@@ -1466,6 +1520,8 @@ def dataframe_2_mordred(df: pl.DataFrame, smiles_col: str = "SMILES", output_col
         A polars DataFrame.
     smiles_col: str, optional
         Name of the column containing SMILES strings.
+    mol_col: Optional, None
+        Name of the column containing Mol objects. Only required if ignore_3D is False.
     output_col: str, optional
         Name of column for the output.
     ignore_3D: Optional[bool]
@@ -1475,7 +1531,7 @@ def dataframe_2_mordred(df: pl.DataFrame, smiles_col: str = "SMILES", output_col
     batch_size: int, optional
         Number of SMILES per batch.
     timeout: int | None
-        Per-worker timeout for joblib parallelism
+        Per-worker timeout for joblib parallelism.
 
     Returns
     -------
@@ -1489,15 +1545,29 @@ def dataframe_2_mordred(df: pl.DataFrame, smiles_col: str = "SMILES", output_col
     [2] Original implementation: https://github.com/mordred-descriptor/mordred
     [3] Implementation: https://github.com/JacksonBurns/mordred-community
     """
-    smiles, n_jobs, smiles_batches = batch_data(
-        data=df[smiles_col].drop_nulls().unique(maintain_order=True).to_list(), n_jobs=n_jobs, batch_size=batch_size
-    )
-    if not smiles:
-        return df.with_columns(pl.lit(None).alias(output_col))
+    if ignore_3D:
+        smiles, n_jobs, smiles_batches = batch_data(
+            data=df[smiles_col].drop_nulls().unique(maintain_order=True).to_list(), n_jobs=n_jobs, batch_size=batch_size
+        )
+        if not smiles:
+            return df.with_columns(pl.lit(None).alias(output_col))
 
-    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=timeout, backend="loky")(
-        delayed(smiles_2_mordred)(smiles=smi, ignore_3D=ignore_3D) for smi in smiles_batches
-    )
+        out = Parallel(n_jobs=n_jobs, verbose=1, timeout=timeout, backend="loky")(
+            delayed(smiles_2_mordred)(smiles=smi) for smi in smiles_batches
+        )
+    else:
+        source = df.select([smiles_col, mol_col]).drop_nulls()
+        smiles = source[smiles_col].to_list()
+
+        mols, n_jobs, mol_batches = batch_data(
+            data=source[mol_col].to_list(), n_jobs=n_jobs, batch_size=batch_size
+        )
+        if not mols:
+            return df.with_columns(pl.lit(None).alias(output_col))
+
+        out = Parallel(n_jobs=n_jobs, verbose=1, timeout=timeout, backend="loky")(
+            delayed(mol_2_mordred)(mol=mol) for mol in mol_batches
+        )
 
     smiles_df = pl.DataFrame(
         {
