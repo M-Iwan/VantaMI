@@ -8,8 +8,10 @@ import os
 from abc import ABC, abstractmethod
 from collections import defaultdict
 import json
+import pickle
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple, Union
+from typing import Any, Dict, Mapping, Optional, Union
 
 import numpy as np
 import polars as pl
@@ -238,6 +240,262 @@ class ZarrMMDataset(MMDataset):
             else:
                 kwargs[field] = self._tensor(node[f"graph/{field}"][idx])
         return Data(**kwargs)
+
+
+class LMDBMMDataset(MMDataset):
+    """
+    Lazy, sample-indexed multimodal dataset backed by LMDB.
+
+    Expected LMDB layout
+    --------------------
+    Reserved metadata key:
+        b"__len__" -> pickled int
+
+    Sample key:
+        index.to_bytes(8, byteorder="big", signed=False)
+
+    Sample value:
+        pickled dictionary whose keys correspond to the *source column names*
+        passed in ``config``.
+
+    Example
+    -------
+    config = {
+        "graph": "graph",
+        "mordred": "target",
+        "molecule_id": "string",
+    }
+
+    record = {
+        "graph": {
+            "x": npt.NDArray,
+            "edge_index": npt.NDArray,
+            "edge_attr": npt.NDArray,
+            "pos": npt.NDArray,
+            "atomic_numbers": npt.NDArray,
+        },
+        "mordred": npt.NDArray,
+        "molecule_id": "mol_12345",
+    }
+    """
+
+    LENGTH_KEY = b"__len__"
+    KEY_WIDTH = 8
+
+    def __init__(self, path: str | Path, config: Dict[str, str], *, subdir: bool = False,
+                 key_fn: Optional[Callable[[int], bytes]] = None, readahead: bool = False,
+                 max_readers: int = 256) -> None:
+        self.path = str(path)
+        self.subdir = subdir
+        self.readahead = readahead
+        self.max_readers = max_readers
+        self.key_fn = key_fn or self.index_to_key
+
+        self._env = None
+        self._owner_pid: Optional[int] = None
+
+        env = self._open_env()
+        try:
+            with env.begin(write=False) as txn:
+                raw_length = txn.get(self.LENGTH_KEY)
+
+            if raw_length is None:
+                raise ValueError(
+                    f"LMDB store < {self.path} > does not contain the required length key < {self.LENGTH_KEY!r} >."
+                )
+
+            self._length = int(pickle.loads(bytes(raw_length)))
+        finally:
+            self.close()
+
+        super().__init__(config)
+
+    @classmethod
+    def index_to_key(cls, index: int) -> bytes:
+        """
+        Encode a non-negative dataset index as a fixed-width LMDB key.
+        """
+        if index < 0:
+            raise ValueError(f"Expected a non-negative index, got {index}.")
+
+        max_index = (1 << (8 * cls.KEY_WIDTH)) - 1
+        if index > max_index:
+            raise ValueError(f"Index < {index} > exceeds the maximum {cls.KEY_WIDTH}-byte unsigned integer.")
+
+        return index.to_bytes(cls.KEY_WIDTH, byteorder="big", signed=False)
+
+    def __getstate__(self):
+        """
+        Prevent an open LMDB environment from being passed to DataLoader workers.
+        """
+        state = self.__dict__.copy()
+        state["_env"] = None
+        state["_owner_pid"] = None
+        return state
+
+    def _open_env(self):
+        """
+        Open a read-only LMDB environment lazily for the current process.
+        """
+        current_pid = os.getpid()
+
+        if self._env is None or self._owner_pid != current_pid:
+            try:
+                import lmdb
+            except ImportError as exc:
+                raise ImportError("< LMDBMMDataset > requires the < lmdb > library.") from exc
+
+            self.close()
+
+            self._env = lmdb.open(
+                self.path,
+                readonly=True,
+                lock=False,
+                readahead=self.readahead,
+                meminit=False,
+                max_readers=self.max_readers,
+                subdir=self.subdir,
+            )
+            self._owner_pid = current_pid
+
+        return self._env
+
+    def close(self) -> None:
+        """
+        Close the read-only LMDB environment for this process.
+        """
+        if self._env is not None:
+            self._env.close()
+
+        self._env = None
+        self._owner_pid = None
+
+    def __del__(self):
+        self.close()
+
+    def __len__(self) -> int:
+        return self._length
+
+    @staticmethod
+    def _to_tensor(value: Any) -> torch.Tensor:
+        """
+        Materialize a dense value as a detached CPU tensor.
+        """
+        if isinstance(value, torch.Tensor):
+            return value.detach().cpu()
+
+        if isinstance(value, np.ndarray):
+            return torch.from_numpy(np.array(value, copy=True))
+
+        return torch.as_tensor(value)
+
+    @classmethod
+    def _to_graph(cls, value: Any):
+        """
+        Materialize an LMDB graph record as PyG Data.
+
+        Accepted graph representations:
+        - an already serialized PyG Data object;
+        - a mapping of Data field names to arrays/tensors/scalars.
+        """
+        try:
+            from torch_geometric.data import Data
+        except ImportError as exc:
+            raise ImportError("Reading graph modalities requires < torch-geometric >.") from exc
+
+        if isinstance(value, Data):
+            return value.clone()
+
+        if not isinstance(value, Mapping):
+            raise TypeError("Graph records must be either PyG Data objects or mappings, got < {type(value)} >.")
+
+        if "edge_index" not in value:
+            raise ValueError("Graph record is missing required field < edge_index >.")
+
+        kwargs: Dict[str, Any] = {}
+
+        for field, field_value in value.items():
+            if isinstance(field_value, (np.ndarray, torch.Tensor, list, tuple)):
+                tensor = cls._to_tensor(field_value)
+
+                if field == "edge_index":
+                    tensor = tensor.to(torch.long)
+
+                kwargs[field] = tensor
+            else:
+                kwargs[field] = field_value
+
+        return Data(**kwargs)
+
+    def _read_record(self, idx: int) -> Mapping[str, Any]:
+        env = self._open_env()
+        key = self.key_fn(idx)
+
+        with env.begin(write=False, buffers=True) as txn:
+            raw = txn.get(key)
+
+        if raw is None:
+            raise KeyError(f"No LMDB record exists for dataset index < {idx} > under key < {key!r} >.")
+
+        record = pickle.loads(bytes(raw))
+
+        if not isinstance(record, Mapping):
+            raise TypeError(f"LMDB record at index < {idx} > must deserialize to a mapping, got < {type(record)} >.")
+
+        return record
+
+    def _get_value(self, batch_key: str, idx: int):
+        record = self._read_record(idx)
+
+        source_column = self.source_columns[batch_key]
+        modality = self.config[batch_key]
+
+        if source_column not in record:
+            raise KeyError(
+                f"LMDB record < {idx} > does not contain < {source_column} > required for batch key < {batch_key} >."
+            )
+
+        value = record[source_column]
+
+        if modality == "graph":
+            return self._to_graph(value)
+
+        if modality in {"descriptor", "image", "target", "sample_weight"}:
+            return self._to_tensor(value)
+
+        return value
+
+    def __getitem__(self, index: int):
+        """
+        Read the LMDB record once, then materialize all configured modalities.
+        """
+        if index < 0:
+            index += len(self)
+
+        if not 0 <= index < len(self):
+            raise IndexError(f"Index < {index} > out of range for dataset of length {len(self)}.")
+
+        record = self._read_record(index)
+        output: Dict[str, Any] = {}
+
+        for batch_key, modality in self.config.items():
+            source_column = self.source_columns[batch_key]
+
+            if source_column not in record:
+                raise KeyError(
+                    f"LMDB record < {index} > does not contain < {source_column} > required for batch key < {batch_key} >."
+                )
+
+            value = record[source_column]
+
+            if modality == "graph":
+                output[batch_key] = self._to_graph(value)
+            elif modality in {"descriptor", "image", "target", "sample_weight"}:
+                output[batch_key] = self._to_tensor(value)
+            else:
+                output[batch_key] = value
+
+        return output
 
 
 class MMBatch:
