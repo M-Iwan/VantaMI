@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping, Optional, Sequence, TypeAlias, List, Tuple
+from typing import Any, Iterable, Iterator, Literal, Mapping, Optional, Sequence, TypeAlias, List, Tuple
 
 import joblib
 from joblib import Parallel, delayed
@@ -331,22 +331,21 @@ class MoleculeManager:
             raise KeyError(f"Cannot search unregistered or invalid SMILES: {unknown!r}")
 
         tasks = (
-            delayed(_run_conformer_search)(self.mol_ids[item], item, self.molecules[item], options)
-            for item in requested_smiles
+            delayed(_run_conformer_search)(self.molecules[item], options) for item in requested_smiles
         )
 
         completed = Parallel(n_jobs=n_jobs, batch_size=batch_size, return_as="generator")(tasks)
 
         with tqdm(completed, total=len(requested_smiles), desc="Conformer search", unit="molecule") as progress:
-            for _, item, molecule, result in progress:
-                self.molecules[item] = molecule
-                self.conformer_results[item] = result
+            for molecule, result in progress:
+                self.molecules[molecule.smiles] = molecule
+                self.conformer_results[molecule.smiles] = result
                 if result["status"] == "failed":
-                    self._record_error(item, "conformer_search", result["error"])
+                    self._record_error(molecule.smiles, "conformer_search", result["error"])
                 else:
-                    self.errors.get(item, {}).pop("conformer_search", None)
-                    if not self.errors.get(item):
-                        self.errors.pop(item, None)
+                    self.errors.get(molecule.smiles, {}).pop("conformer_search", None)
+                    if not self.errors.get(molecule.smiles):
+                        self.errors.pop(molecule.smiles, None)
 
     def retain_lowest_energy_conformers(self, smiles: Optional[Sequence[str]] = None, *,
                                         keep_global_charge_sets: bool = True) -> None:
@@ -410,7 +409,7 @@ class MoleculeManager:
         return output_path
 
     @classmethod
-    def load(cls, path: str, Path) -> MoleculeManager:
+    def load(cls, path: str | Path) -> MoleculeManager:
         """
         Restore a serialized manager instance from disk.
 
@@ -427,6 +426,52 @@ class MoleculeManager:
         if not isinstance(manager, cls):
             raise TypeError(f"Saved object is not a {cls.__name__}.")
         return manager
+
+    def save_molecules(self, path: str | Path, subset: Literal["all", "valid", "invalid"] = "all") -> list[Path]:
+        """
+        Serialize selected registered Molecule instances individually.
+
+        Parameters
+        ----------
+        path: str | Path
+            Directory in which individual molecule Joblib files are written.
+        subset: {"all", "valid", "invalid"}
+            Molecules to serialize:
+
+            - "all" saves every registered molecule.
+            - "valid" saves molecules whose conformer search succeeded.
+            - "invalid" saves registered molecules whose conformer search failed.
+
+        Returns
+        -------
+        list[pathlib.Path]
+            Paths of successfully written molecule files.
+        """
+        if subset not in ("all", "valid", "invalid"):
+            raise ValueError(f"Unknown subset {subset!r}. Expected one of: 'all', 'valid', 'invalid'.")
+
+        output_dir = Path(path).expanduser()
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        if subset == "all":
+            selected_smiles = list(self.molecules)
+        elif subset == "valid":
+            selected_smiles = [
+                smiles for smiles, result in self.conformer_results.items() if result["status"] == "success"
+            ]
+        else:
+            selected_smiles = [
+                smiles for smiles, result in self.conformer_results.items() if result["status"] == "failed"
+            ]
+
+        saved_paths: list[Path] = []
+
+        for molecule_index, smiles in enumerate(selected_smiles):
+            molecule = self.molecules[smiles]
+            molecule_path = output_dir / f"{molecule.id}.joblib"
+            saved_paths.append(molecule.save(molecule_path))
+
+        return saved_paths
 
     def to_dataframe(self) -> pl.DataFrame:
         """
