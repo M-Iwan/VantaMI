@@ -51,11 +51,10 @@ class GNNModule(nn.Module):
         self.edge_index_key = edge_index_key
         self.edge_attr_key = edge_attr_key
 
-
     def forward(self, graph_batch):
         x = graph_batch.x
-        edge_index = getattr(graph_batch, self.edge_index_attr)
-        edge_attr = getattr(graph_batch, self.edge_attr_attr, None)
+        edge_index = getattr(graph_batch, self.edge_index_key)
+        edge_attr = getattr(graph_batch, self.edge_attr_key, None)
 
         if self.accepts_edge_attr and edge_attr is not None:
             x = self.graph_layer(x, edge_index, edge_attr)
@@ -769,13 +768,13 @@ def build_rnn_config():
     }
 
 
-def build_linear_layers(sizes: List[int], batch_norm: bool = True,
-                        activation: Optional[str] = "silu", dropout: float = 0.0):
+def build_linear_layers(sizes: List[int], batch_norm: bool = True, activation: Optional[str] = "silu",
+                        dropout: float = 0.0):
     """
     Build a fully connected network from successive feature dimensions.
 
     Each linear layer is Xavier-normal initialized and followed, when enabled,
-    by batch normalization, an activation, and dropout, except for the last layer.
+    by batch normalization, an activation, and dropout.
 
     Parameters
     ----------
@@ -808,7 +807,7 @@ def build_linear_layers(sizes: List[int], batch_norm: bool = True,
     lin_out_size = linear_sizes[-1]
     in_features = linear_sizes.pop(0)
 
-    for out_features in linear_sizes[:-1]:
+    for out_features in linear_sizes:
         linear = nn.Linear(in_features, out_features)
         init_linear(linear)
         linear_layers.append(linear)
@@ -821,8 +820,6 @@ def build_linear_layers(sizes: List[int], batch_norm: bool = True,
             linear_layers.append(nn.Dropout(p=dropout))
 
         in_features = out_features
-
-    linear_layers.append(nn.Linear(in_features, lin_out_size))
 
     return nn.Sequential(*linear_layers), lin_out_size
 
