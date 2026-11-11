@@ -1,14 +1,18 @@
+from __future__ import annotations
+
 import warnings
 from typing import Dict, Any, List, Union
+
+from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
 from torch_geometric.data import Batch as GeometricBatch
 
-from vantami.dl.dataset import MMDataset, PolarsMMDataset, ZarrMMDataset, MMBatch
+from vantami.dl.dataset import MMDataset, PolarsMMDataset, MMBatch, LMDBGraphDataset, GraphBatch
 
 
-MMDataset_Type = Union[MMDataset, PolarsMMDataset, ZarrMMDataset]
+MMDataset_Type = Union[MMDataset, PolarsMMDataset, LMDBGraphDataset]
 
 
 class MMLoader:
@@ -163,3 +167,30 @@ class MMLoader:
     def __len__(self):
         """Number of batches per epoch."""
         return len(self.dataloader)
+
+
+class GraphLoader(DataLoader):
+    """
+    DataLoader preconfigured with `GraphBatch.collate_fn`.
+    """
+
+    def __init__(self, dataset: LMDBGraphDataset, *, batch_size: int = 256, shuffle: bool = False, num_workers: int = 0,
+                 pin_memory: bool = True, persistent_workers: bool | None = None, **kwargs: Any) -> None:
+        if not isinstance(dataset, LMDBGraphDataset):
+            raise TypeError("dataset must be an LMDBGraphDataset.")
+
+        if persistent_workers is None:
+            persistent_workers = num_workers > 0
+        if persistent_workers and num_workers == 0:
+            raise ValueError("persistent_workers=True requires num_workers > 0.")
+
+        super().__init__(
+            dataset=dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            persistent_workers=persistent_workers,
+            collate_fn=GraphBatch.collate_fn,
+            **kwargs,
+        )
