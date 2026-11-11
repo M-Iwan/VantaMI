@@ -771,7 +771,7 @@ def get_transformer_params(features: str):
         'ECFP': binary,
         'MACCS': binary,
         'Klek': binary,
-        'Mordred': binary,
+        'Mordred': continuous,
         'CDDD': continuous,
         'ChemBERTa': continuous,
         'RDKit': continuous,
