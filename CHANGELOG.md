@@ -1,15 +1,17 @@
-# [0.5.3]: 05-11-2026
+# [0.5.3]: 09-11-2026
 [Added]
 - Conformer generation script
 - Automated directory building to IO functions
 - Zarr-backed datasets for Deep Learning
-- New module (vantami.dl.storage) for serializing supported modalities to Zarr
+- New module (vantami.dl.storage) for serializing supported modalities to Zarr | LMDB
 - Parallel graph construction for GraphVectorizer
 - Parallel string tokenization for StringVectorizer
 - Spatial encoding for GraphVectorizer
 
 [Updated]
 - Cleaned, added docstrings, and generally updated both vantami.dl.modules and vantami.dl.models/unit
+- Merged Molecule and DeepMolecule to a more clean part
+- Dedicated methods for 3D Mordred descriptors
 
 [Changed]
 - Updated Uni-pKa scripts to a final working version
