@@ -1,10 +1,11 @@
+from copy import copy
 from typing import Dict, Optional, Tuple, Any, Iterable, List
 
 import numpy as np
 
 import torch
 from torch import Tensor, nn
-from torch_geometric.nn import global_mean_pool
+from torch_geometric.nn import global_mean_pool, global_add_pool
 
 from vantami.dl.unit import MMUnit, MMRegressionUnit, MMClassificationUnit
 from vantami.dl.modules import build_graph_layers, build_linear_layers
@@ -14,63 +15,96 @@ LossSummary = Dict[str, Any]
 LossValue = Tuple[Tensor, Tensor]
 
 
-class IonMeleon(MMRegressionUnit):
+class SpatialGINEConv(MMRegressionUnit):
     """
-    CheMeleon-like model implemented using our code.
+    Dual channel covalent/spatial graph neural network.
     
     Parameters
     ----------
     device: str
         Device to use. Default is cpu.
-    num_task: int, optional.
-        Number of regresison outputs. Default is 1613 (Mordred descriptors size)
-    model_name: str, optional
-        Default is IonMeleon.
-    gnn_params: dict
-        Dictionary for build_graph_layers
+    node_input_size: int
+        Node encoding size.
+    cov_gnn_params: dict
+        Dictionary of GNN parameters for covalent channel
+    spatial_gnn_params: dict
+        Dictionary of GNN parameters for spatial channel
     lin_params: dict
         Dictionary for build_linear_layers
+    num_task: int, optional
+        Number of regression outputs
+    keep_fraction: float, optional
+        Fraction of target values to use for loss
     max_grad_norm: float
         Gradient clipping max norm in fit_epoch. Default is 1.0.
     verbose: int, optional
         Set verbosity level. 0 = no logs, 1 = standard progress, 2 = debugging
+    model_name: str, optional
+        Name of the model
     """
 
-    def __init__(self, device: str = 'cpu', num_task: int = 1, model_name: str = 'IonMeleon',
-                 gnn_params: Optional[Dict] = None, lin_params: Optional[Dict] = None,
-                 max_grad_norm: Optional[float] = 1.0, keep_fraction: Optional[float] = 0.15,
-                 verbose: Optional[int] = 1):
-        super().__init__(device=device, num_task=num_task, model_name=model_name, max_grad_norm=max_grad_norm,
-                         verbose=verbose)
-        self.gnn_params = gnn_params
-        self.lin_params = lin_params
-        self.gnn_input_name = self.gnn_params.get('input_name', "Graph")
-        self.gnn_layer, self.gnn_out_size = build_graph_layers(self.gnn_params)
-        self.lin_params["sizes"] = [self.gnn_out_size] + self.lin_params.get("sizes") + [self.num_task]
-        self.lin_layers, _ = build_linear_layers(**self.lin_params)
+    def __init__(self, device: str, node_input_size: int, cov_gnn_params: dict, spatial_gnn_params: dict,
+                 lin_params: dict, num_task: int, keep_fraction: float = 0.15, max_grad_norm: float = 1.0,
+                 verbose: int = 1, model_name: str = 'IonFlow_I'):
+
+        super().__init__(device=device, num_task=num_task, model_name=model_name,
+                         max_grad_norm=max_grad_norm, verbose=verbose)
+
+        self.node_input_size = node_input_size
+        self.conv_input_size = cov_gnn_params.get("input_dim")
         self.keep_fraction = keep_fraction
+
+        self.cov_gnn_params = cov_gnn_params
+        self.spatial_gnn_params = spatial_gnn_params
+        self.lin_params = dict(lin_params)
+
+        self.adaptation_layer = nn.Sequential(
+            nn.Linear(self.node_input_size, self.conv_input_size),
+            nn.SiLU()
+        )
+
+        self.cov_gnn_layer, self.cov_gnn_out_size = build_graph_layers(self.cov_gnn_params)
+        self.spatial_gnn_layer, self.spatial_gnn_out_size = build_graph_layers(self.spatial_gnn_params)
+        self.gnn_out_size = self.spatial_gnn_out_size + self.cov_gnn_out_size
+
+        self.lin_params["sizes"] = [self.gnn_out_size] + self.lin_params.get("sizes")
+        self.lin_layers, self.lin_out_size = build_linear_layers(**self.lin_params)
+
+        self.prediction_heads = nn.Linear(self.lin_out_size, self.num_task)
 
     def forward(self, batch_data: dict):
         """
-        Message passing on the graph batch, then global mean pool and lin_layers.
-
         Parameters
         ----------
-        batch_data : dict
+        batch_data: dict
 
         Returns
         -------
-        x_out : torch.Tensor
+        x_out: torch.Tensor
             Shape (batch, num_task).
         """
-        graph_batch = batch_data[self.gnn_input_name].to(self.device)
+        graph_batch = batch_data["graph"].to(self.device)
 
-        for layer in self.gnn_layer:
-            x = layer(graph_batch)
-            graph_batch.x = x
+        graph_batch.x = self.adaptation_layer(graph_batch.x)
 
-        x_out = global_mean_pool(graph_batch.x, graph_batch.batch)
-        x_out = self.lin_layers(x_out)
+        cov_graph = copy(graph_batch)
+        spatial_graph = copy(graph_batch)
+
+        for layer in self.cov_gnn_layer:
+            cov_graph.x = layer(cov_graph)
+
+        for layer in self.spatial_gnn_layer:
+            spatial_graph.x = layer(spatial_graph)
+
+        cov_pool = global_add_pool(cov_graph.x, cov_graph.batch)
+        spatial_pool = global_add_pool(spatial_graph.x, spatial_graph.batch)
+
+        x = torch.cat((cov_pool, spatial_pool), dim=-1)
+
+        for layer in self.lin_layers:
+            x = layer(x)
+
+        x_out = self.prediction_heads(x)
 
         return x_out
 
@@ -80,7 +114,7 @@ class IonMeleon(MMRegressionUnit):
 
         Parameters
         ----------
-        dataloader : iterable
+        dataloader: iterable
             Iterable yielding batches.
 
         Returns
@@ -116,7 +150,7 @@ class IonMeleon(MMRegressionUnit):
             batch_loss = self.loss(
                 y_pred=y_pred,
                 y_true=y_true,
-                y_wgts=y_wgts,
+                y_wgts=masked_y_wgts,
                 group=self._get_batch_group(batch_data),
             )
 
