@@ -480,12 +480,15 @@ class MoleculeManager:
         Returns
         -------
         pl.DataFrame
+            Result table with one row per input molecule.
         """
         rows: list[dict[str, Any]] = []
+
         for smiles in self.molecules:
             result = self.conformer_results.get(smiles, {})
+
             rows.append({
-                "mol_id": self.mol_ids[smiles],
+                "mol_id": str(self.mol_ids[smiles]),
                 "smiles": smiles,
                 "valid": True,
                 "conformer_status": result.get("status", "skipped"),
@@ -497,18 +500,31 @@ class MoleculeManager:
 
         for smiles, mol_id in self.failed_smiles.items():
             rows.append({
-                "mol_id": mol_id,
+                "mol_id": str(mol_id),
                 "smiles": smiles,
                 "valid": False,
                 "conformer_status": "skipped",
                 "conformer_id": None,
                 "energy": None,
                 "method": None,
-                "error": self.errors.get(smiles, {}).get("validation")
-                         or self.errors.get(smiles, {}).get("initialization"),
+                "error": (
+                        self.errors.get(smiles, {}).get("validation")
+                        or self.errors.get(smiles, {}).get("initialization")
+                ),
             })
 
-        return pl.DataFrame(rows)
+        schema = {
+            "mol_id": pl.String,
+            "smiles": pl.String,
+            "valid": pl.Boolean,
+            "conformer_status": pl.String,
+            "conformer_id": pl.Int64,
+            "energy": pl.Float64,
+            "method": pl.String,
+            "error": pl.String,
+        }
+
+        return pl.DataFrame(rows, schema=schema, strict=True)
 
     def export_results(self, path: str | Path) -> Path:
         """
