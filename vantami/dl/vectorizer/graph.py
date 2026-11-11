@@ -421,7 +421,7 @@ class GraphVectorizer:
 
     def from_molecule(self, molecule: Molecule, charge_method: ChargeMethod = "Gasteiger",
                       energy_method: EnergyMethod = "MMFF94", heavy_only: bool = True, combine_hydrogens: bool = False,
-                      include_pos: bool = False) -> Data:
+                      include_pos: bool = True) -> Data:
         """
         Generate a PyTorch Geometric graph from a prepared Molecule object.
 
@@ -527,7 +527,7 @@ class GraphVectorizer:
 
     def encode_molecules(self, molecule: Molecule | Iterable[Molecule], charge_method: ChargeMethod = "Gasteiger",
                          energy_method: EnergyMethod = "MMFF94", heavy_only: bool = True, combine_hydrogens: bool = False,
-                         include_pos: bool = False) -> List[Data]:
+                         include_pos: bool = True) -> List[Data]:
         """
         Convert one or more prepared Molecule objects into graph representations.
 
@@ -576,7 +576,7 @@ class GraphVectorizer:
 
     def encode_many_molecules(self, molecule: Iterable[Molecule], charge_method: ChargeMethod = "Gasteiger",
                               energy_method: EnergyMethod = "MMFF94", heavy_only: bool = True, combine_hydrogens: bool = False,
-                              include_pos: bool = False, n_jobs: int = 1, batch_size: int = 256,
+                              include_pos: bool = True, n_jobs: int = 1, batch_size: int = 256,
                               timeout: int | None = None) -> List[Data]:
         """
         Convert multiple Molecules into PyTorch Geometric graphs in parallel.
