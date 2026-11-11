@@ -880,7 +880,7 @@ class GraphVectorizer:
 
         return graph
 
-    def from_graph(self, graph: Data, r_cut: float = 6.0, n_rbf: int = 32, n_abf: int | None = 32,
+    def from_graph(self, graph: Data, r_cut: float = 6.0, n_rbf: int = 32, n_abf: int | None = None,
                    max_neighbors: int = 64) -> Data:
         """
         Encode multiple 3D non-covalent spatial edges from graph.pos.
@@ -920,7 +920,7 @@ class GraphVectorizer:
             graph = self.abf_from_graph(graph=graph, r_cut=r_cut, n_abf=n_abf)
         return graph
 
-    def encode_spatial(self, graph: Iterable[Data], r_cut: float, n_rbf: int = 32, n_abf: int | None = 32,
+    def encode_spatial(self, graph: Iterable[Data], r_cut: float, n_rbf: int = 32, n_abf: int | None = None,
                        max_neighbors: int = 64) -> List[Data]:
         """
         Encode multiple 3D non-covalent spatial edges from graph.pos.
@@ -968,7 +968,7 @@ class GraphVectorizer:
         else:
             raise TypeError(f"Expected < graph > to be either Data or Iterable[Data], got {type(graph)} instead.")
 
-    def encode_many_spatial(self, graph: Iterable[Data], r_cut: float = 6.0, n_rbf: int = 32, n_abf: int = 32,
+    def encode_many_spatial(self, graph: Iterable[Data], r_cut: float = 6.0, n_rbf: int = 32, n_abf: int | None= None,
                             max_neighbors: int = 64, n_jobs: int = 1, batch_size: int = 256,
                             timeout: int | None = None) -> List[Data]:
         """
@@ -982,7 +982,7 @@ class GraphVectorizer:
             Cutoff distance for cosine smoothing.
         n_rbf: int, optional
             Number of Gaussian Radial Basis Functions to use for encoding distances
-        n_abf: int, optional
+        n_abf: int | None
             Number of Gaussian Angular Basis Functions to use for encoding angles
         max_neighbors: int
             Maximum number of encoded neighbors
@@ -996,10 +996,18 @@ class GraphVectorizer:
         Returns
         -------
         List[Data] with added:
-            graph.radial_basis
-                Long tensor of shape [n_nodes, n_rbf]
-            graph.angular_basis
-                Long tensor of shape [n_nodes, n_abf]
+            spatial_edge_index:
+                Long tensor with shape [2, num_spatial_edges].
+            spatial_edge_attr:
+                Float tensor with shape [num_spatial_edges, n_rbf].
+            atom_radial_basis:
+                Float tensor with shape [num_nodes, n_rbf].
+            spatial_angle_index:
+                Long tensor with shape [3, num_spatial_triplets].
+            spatial_angle_attr:
+                Float tensor with shape [num_spatial_triplets, n_abf].
+            atom_angular_basis:
+                Float tensor with shape [num_nodes, n_abf].
         """
         graphs, n_jobs, graph_batches = batch_data(data=graph, n_jobs=n_jobs, batch_size=batch_size)
 
