@@ -1,4 +1,6 @@
 import os
+from pathlib import Path
+import warnings
 import inspect
 import datetime
 from abc import ABC, abstractmethod
@@ -47,12 +49,11 @@ class MMUnit(nn.Module, ABC):
     """
 
     def __init__(self, device: str = "cpu", num_task: int = 1, model_name: str = "Unit",
-                 max_grad_norm: Optional[float] = None, verbose: int = 1) -> None:
+                 max_grad_norm: Optional[float] = None, verbose: int = 1, seed: int | None = 42) -> None:
         super().__init__()
 
         self.device = device
         self.num_task = num_task
-        self.name = model_name
         self.model_name = model_name
         self.max_grad_norm = max_grad_norm
         self.verbose = verbose
@@ -64,8 +65,13 @@ class MMUnit(nn.Module, ABC):
         self.logs = defaultdict(list)
         self.epoch = 1
         self.best_state_dict: Optional[Dict[str, Tensor]] = None
-        self.best_epoch: Optional[int] = None
+        self.best_fit_loss: float | None = None
+        self.best_val_loss: float | None = None
         self.hyperparameters: Dict[str, Any] = {}
+        self.numpy_rng_state = None
+        self.torch_rng_state = None
+        if seed is not None:
+            self.set_seed(seed)
 
     def log(self, message: str, level: int = 1):
         if self.verbose >= level:
@@ -108,6 +114,12 @@ class MMUnit(nn.Module, ABC):
         dict
         """
 
+    @abstractmethod
+    def mw_metrics(self, y_true: Tensor, y_pred: Tensor, y_wgts: Tensor) -> Dict[str, Any]:
+        """
+        Calculate overall and task-level weighted metrics for an epoch.
+        """
+
     def grad_norm(self) -> float:
         """
         Calculate the L2 norm across all available parameter gradients.
@@ -134,11 +146,20 @@ class MMUnit(nn.Module, ABC):
 
         return None
 
+    def _batch_to_device(self, batch_data: dict) -> dict:
+        return {
+            key: value.to(self.device) if isinstance(value, Tensor) else value
+            for key, value in batch_data.items()
+        }
+
     @staticmethod
     def _normalise_group_tags(group_values: Iterable[Any]) -> List[set[str]]:
         """
         Convert row-wise group annotations into cleaned sets of tag strings.
         """
+        if isinstance(group_values, Tensor):
+            group_values = group_values.detach().cpu().numpy()
+
         normalised_tags = []
 
         for row_value in group_values:
@@ -169,6 +190,45 @@ class MMUnit(nn.Module, ABC):
 
         return normalised_loss, epoch_metrics
 
+    @staticmethod
+    def _detach_loss_summary(loss_summary: LossSummary) -> LossSummary:
+        detached = {
+            "Total": tuple(value.detach() for value in loss_summary["Total"]),
+            "Task": tuple(value.detach() for value in loss_summary["Task"]),
+        }
+
+        if "Group" in loss_summary:
+            detached["Group"] = {
+                tag: tuple(value.detach() for value in values)
+                for tag, values in loss_summary["Group"].items()
+            }
+
+        return detached
+
+    @staticmethod
+    def _mask_metric_data(y_true: npt.NDArray, y_pred: npt.NDArray, y_wgts: npt.NDArray):
+        mask = (
+                np.isfinite(y_true)
+                & np.isfinite(y_pred)
+                & np.isfinite(y_wgts)
+                & (y_wgts > 0)
+        )
+
+        return y_true[mask], y_pred[mask], y_wgts[mask]
+
+    def _step_scheduler(self, metric: Optional[float] = None) -> None:
+        if self.scheduler is None:
+            return
+
+        if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+            if metric is None:
+                raise ValueError(
+                    "ReduceLROnPlateau requires a monitored metric."
+                )
+            self.scheduler.step(metric)
+        else:
+            self.scheduler.step()
+
     def fit_epoch(self, dataloader: Iterable[dict]) -> Tuple[LossSummary, Dict[str, Any], List[float]]:
         """
         Train the model for one epoch.
@@ -195,21 +255,18 @@ class MMUnit(nn.Module, ABC):
         for batch_index, batch_data in enumerate(dataloader, start=1):
             self.log(f"Iterating over batch: {batch_index}", level=2)
             self.optimizer.zero_grad()
+            batch_data = self._batch_to_device(batch_data)
 
             y_pred = self(batch_data)
-            y_true = batch_data["y_true"].to(self.device)
-            y_wgts = batch_data["y_wgts"].to(self.device)
+            y_true = batch_data["y_true"]
+            y_wgts = batch_data["y_wgts"]
 
             self.log(f"Training batch {batch_index}: y_pred shape={y_pred.shape}, "
                      f"y_true shape={y_true.shape}, y_wgts shape={y_wgts.shape}.", level=2)
 
-            if any([y_pred.shape == 0, y_true.shape==0, y_wgts.shape==0]):
-                self.log(f"Zero size batch encountered", level=1)
+            if y_pred.numel() == 0 or y_true.numel() == 0 or y_wgts.numel() == 0:
+                self.log("Zero-size batch encountered.", level=1)
                 continue
-
-            epoch_data["y_pred"].append(y_pred)
-            epoch_data["y_true"].append(y_true)
-            epoch_data["y_wgts"].append(y_wgts)
 
             batch_loss = self.loss(
                 y_pred=y_pred,
@@ -219,13 +276,26 @@ class MMUnit(nn.Module, ABC):
             )
 
             total_loss, total_weight = batch_loss["Total"]
-            total_loss.backward()
 
-            batch_gradient_norm = self.grad_norm() / (total_weight.item() + 1e-6)
-            gradient_norms.append(batch_gradient_norm)
+            if total_weight.item() <= 0:
+                self.log(f"Training batch {batch_index} has no valid targets; skipping", level=1)
+                continue
+
+            epoch_data["y_pred"].append(y_pred.detach())
+            epoch_data["y_true"].append(y_true.detach())
+            epoch_data["y_wgts"].append(y_wgts.detach())
+
+            loss_value = total_loss / total_weight.clamp_min(
+                torch.finfo(total_weight.dtype).eps
+            )
+            loss_value.backward()
+
+            gradient_norm = self.grad_norm()
+
+            gradient_norms.append(gradient_norm)
 
             self.log(f"Training batch {batch_index}: loss sum={total_loss.item():.5f}, "
-                     f"weight sum={total_weight.item():.5f}, gradient norm={batch_gradient_norm:.5f}.", level=2)
+                     f"weight sum={total_weight.item():.5f}, gradient norm={gradient_norm:.5f}.", level=2)
 
             if self.max_grad_norm is not None:
                 torch.nn.utils.clip_grad_norm_(
@@ -234,11 +304,7 @@ class MMUnit(nn.Module, ABC):
                 )
 
             self.optimizer.step()
-            batch_losses.append(batch_loss)
-
-        if self.scheduler is not None:
-            self.scheduler.step()
-            self.log("Learning-rate scheduler step completed.", level=2)
+            batch_losses.append(self._detach_loss_summary(batch_loss))
 
         epoch_loss, epoch_metrics = self._summarise_epoch(batch_losses, epoch_data)
         return epoch_loss, epoch_metrics, gradient_norms
@@ -254,16 +320,17 @@ class MMUnit(nn.Module, ABC):
 
         with torch.no_grad():
             for batch_index, batch_data in enumerate(dataloader, start=1):
+                batch_data = self._batch_to_device(batch_data)
                 y_pred = self(batch_data)
-                y_true = batch_data["y_true"].to(self.device)
-                y_wgts = batch_data["y_wgts"].to(self.device)
+                y_true = batch_data["y_true"]
+                y_wgts = batch_data["y_wgts"]
 
                 self.log(f"Evaluation batch {batch_index}: y_pred shape={y_pred.shape}, "
                          f"y_true shape={y_true.shape}, y_wgts shape={y_wgts.shape}.", level=2)
 
-                epoch_data["y_pred"].append(y_pred)
-                epoch_data["y_true"].append(y_true)
-                epoch_data["y_wgts"].append(y_wgts)
+                if y_pred.numel() == 0 or y_true.numel() == 0 or y_wgts.numel() == 0:
+                    self.log("Zero-size batch encountered.", level=1)
+                    continue
 
                 batch_loss = self.loss(
                     y_pred=y_pred,
@@ -273,6 +340,15 @@ class MMUnit(nn.Module, ABC):
                 )
 
                 total_loss, total_weight = batch_loss["Total"]
+
+                if total_weight.item() <= 0:
+                    self.log(f"Training batch {batch_index} has no valid targets; skipping", level=1)
+                    continue
+
+                epoch_data["y_pred"].append(y_pred)
+                epoch_data["y_true"].append(y_true)
+                epoch_data["y_wgts"].append(y_wgts)
+
                 self.log(f"Evaluation batch {batch_index}: loss sum={total_loss.item():.5f}, "
                          f"weight sum={total_weight.item():.5f}.", level=2)
 
@@ -280,39 +356,57 @@ class MMUnit(nn.Module, ABC):
 
         return self._summarise_epoch(batch_losses, epoch_data)
 
-    def fit(self, dataloader: Iterable[dict], n_epochs: int = 4, early_stop: Optional[int] = 8,
-            save_freq: Optional[int] = 8, save_dir: Optional[str] = None):
+    def fit(self, dataloader: Iterable[dict], n_epochs: int = 4, early_stop: int | None = 8,
+            save_freq: int | None = 8, save_dir: str | None = None):
         """
         Train the model using training loss for early stopping.
         """
         if self.loss_fn is None or self.optimizer is None:
             raise ValueError("Set the loss function and optimizer before fitting the model.")
 
+        if n_epochs <= 0:
+            raise ValueError("n_epochs must be greater than 0.")
+
+        if early_stop is not None and early_stop <= 0:
+            raise ValueError("early_stop must be greater than 0.")
+
+        if save_freq is not None and save_freq <= 0:
+            raise ValueError("save_freq must be greater than 0.")
+
+        if save_dir is not None and not os.path.isdir(save_dir):
+            os.makedirs(save_dir, exist_ok=True)
+
         self.log(f"Starting training for up to {n_epochs} epoch(s).", level=1)
 
-        best_loss = float("inf")
+        if self.best_fit_loss is None:
+            self.best_fit_loss = float("inf")
+
+        start_epoch = self.epoch
+        end_epoch = start_epoch + n_epochs
         patience = deepcopy(early_stop) if early_stop is not None else None
 
-        for epoch_number in range(1, n_epochs + 1):
+        for epoch_number in range(start_epoch, end_epoch):
             self.log(f"Starting training epoch {epoch_number}/{n_epochs}.", level=1)
 
-            train_loss, train_metrics, train_grad_norms = self.fit_epoch(dataloader, )
+            train_loss, train_metrics, train_grad_norms = self.fit_epoch(dataloader)
 
             self.logs["train_loss"].append((epoch_number, train_loss))
             self.logs["train_metrics"].append((epoch_number, train_metrics))
             self.logs["train_grad_norms"].append((epoch_number, train_grad_norms))
+
+            self._step_scheduler(train_loss["Total"])
 
             current_loss = train_loss["Total"]
 
             self.log(f"Epoch {epoch_number} train loss: {current_loss:.5f}", level=1)
 
             if early_stop is not None:
-                if current_loss < best_loss:
-                    best_loss = current_loss
+                if current_loss < self.best_fit_loss:
+                    self.best_fit_loss = current_loss
                     patience = deepcopy(early_stop)
                     self.set_best_model(epoch_number)
 
-                    self.log(f"Epoch {epoch_number}: new best training loss: {best_loss:.5f}.", level=1)
+                    self.log(f"Epoch {epoch_number}: new best training loss: {self.best_fit_loss:.5f}.", level=1)
 
                     if save_dir is not None:
                         save_path = os.path.join(save_dir, f"{self.model_name}_min.pth")
@@ -323,7 +417,7 @@ class MMUnit(nn.Module, ABC):
                     self.log(f"Epoch {epoch_number}: early-stopping patience remaining: {patience}.", level=1)
 
                 if patience == 0:
-                    self.log(f"Early stopping at epoch {epoch_number} with minimum loss {best_loss:.5f}", level=1)
+                    self.log(f"Early stopping at epoch {epoch_number} with minimum loss {self.best_fit_loss:.5f}", level=1)
                     self.get_best_model()
                     self.epoch = self.best_epoch
                     break
@@ -345,16 +439,34 @@ class MMUnit(nn.Module, ABC):
         if self.loss_fn is None or self.optimizer is None:
             raise ValueError("Set the loss function and optimizer before fitting the model.")
 
-        self.log(f"Starting training and evaluation for up to {n_epochs} epoch(s).", level=1)
+        if n_epochs <= 0:
+            raise ValueError("n_epochs must be greater than 0.")
 
-        best_loss = float("inf")
+        if early_stop is not None and early_stop <= 0:
+            raise ValueError("early_stop must be greater than 0.")
+
+        if save_freq is not None and save_freq <= 0:
+            raise ValueError("save_freq must be greater than 0.")
+
+        if save_dir is not None and not os.path.isdir(save_dir):
+            os.makedirs(save_dir, exist_ok=True)
+
+        self.log(f"Starting training for up to {n_epochs} epoch(s).", level=1)
+
+        if self.best_val_loss is None:
+            self.best_val_loss = float("inf")
+
+        start_epoch = self.epoch
+        end_epoch = start_epoch + n_epochs
         patience = deepcopy(early_stop) if early_stop is not None else None
 
-        for epoch_number in range(1, n_epochs + 1):
+        for epoch_number in range(start_epoch, end_epoch):
             self.log(f"Starting training and evaluation epoch {epoch_number}/{n_epochs}.", level=1)
 
-            train_loss, train_metrics, train_grad_norms = self.fit_epoch(train_dataloader, )
-            eval_loss, eval_metrics = self.eval_epoch(eval_dataloader, )
+            train_loss, train_metrics, train_grad_norms = self.fit_epoch(train_dataloader)
+            eval_loss, eval_metrics = self.eval_epoch(eval_dataloader)
+
+            self._step_scheduler(eval_loss["Total"])
 
             self.logs["train_loss"].append((epoch_number, train_loss))
             self.logs["train_metrics"].append((epoch_number, train_metrics))
@@ -364,16 +476,16 @@ class MMUnit(nn.Module, ABC):
 
             current_loss = eval_loss["Total"]
 
-            self.log(f"Epoch {epoch_number} train loss: {train_loss['Total']:.5f}" , level=1)
+            self.log(f"Epoch {epoch_number} train loss: {train_loss['Total']:.5f}", level=1)
             self.log(f"Epoch {epoch_number} eval loss: {current_loss:.5f}", level=1)
 
             if early_stop is not None:
-                if current_loss < best_loss:
-                    best_loss = current_loss
+                if current_loss < self.best_val_loss:
+                    self.best_val_loss = current_loss
                     patience = deepcopy(early_stop)
                     self.set_best_model(epoch_number)
 
-                    self.log(f"Epoch {epoch_number}: new best evaluation loss: {best_loss:.5f}.", level=1)
+                    self.log(f"Epoch {epoch_number}: new best evaluation loss: {self.best_val_loss:.5f}.", level=1)
 
                     if save_dir is not None:
                         save_path = os.path.join(save_dir, f"{self.model_name}_min.pth")
@@ -384,7 +496,7 @@ class MMUnit(nn.Module, ABC):
                     self.log(f"Epoch {epoch_number}: early-stopping patience remaining: {patience}.", level=1)
 
                 if patience == 0:
-                    self.log(f"Early stopping at epoch {epoch_number} with minimum loss {best_loss:.5f}", level=1)
+                    self.log(f"Early stopping at epoch {epoch_number} with minimum loss {self.best_val_loss:.5f}", level=1)
                     self.get_best_model()
                     self.epoch = self.best_epoch
                     break
@@ -407,6 +519,7 @@ class MMUnit(nn.Module, ABC):
 
         with torch.no_grad():
             for batch_data in dataloader:
+                batch_data = self._batch_to_device(batch_data)
                 predictions.append(self(batch_data))
 
         if not predictions:
@@ -414,7 +527,7 @@ class MMUnit(nn.Module, ABC):
 
         return torch.cat(predictions, dim=0).detach().cpu().numpy()
 
-    def loss(self, y_pred: Tensor, y_true: Tensor, y_wgts: Tensor, group: Optional[Iterable[Any]] = None) -> LossSummary:
+    def loss(self, y_pred: Tensor, y_true: Tensor, y_wgts: Tensor, group: Iterable[Any] | None = None) -> LossSummary:
         """
         Calculate a masked and weighted element-wise loss.
 
@@ -440,8 +553,30 @@ class MMUnit(nn.Module, ABC):
             When group annotations are supplied, `Group` maps each tag to the
             same tuple structure.
         """
-        valid_target_mask = ~torch.isnan(y_true)
-        safe_y_true = torch.nan_to_num(y_true, nan=0.0)
+        if self.loss_fn is None:
+            raise RuntimeError("Set a loss function before calculating loss.")
+
+        if y_pred.shape != y_true.shape or y_pred.shape != y_wgts.shape:
+            raise ValueError(
+                f"Expected matching shapes, got y_pred={y_pred.shape}, y_true={y_true.shape}, y_wgts={y_wgts.shape}."
+            )
+
+        if not y_wgts.is_floating_point():
+            y_wgts = y_wgts.float()
+
+        if torch.any(~torch.isfinite(y_wgts)):
+            raise ValueError("y_wgts must contain only finite values.")
+
+        if torch.any(y_wgts < 0):
+            raise ValueError("y_wgts must be non-negative.")
+
+        valid_target_mask = torch.isfinite(y_true)
+        safe_y_true = torch.nan_to_num(
+            y_true,
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0
+        )
 
         elementwise_loss = self.loss_fn(y_pred, safe_y_true)
         masked_weights = y_wgts * valid_target_mask
@@ -549,42 +684,18 @@ class MMUnit(nn.Module, ABC):
         )
 
         normalized_loss: LossSummary = {
-            "Total": round(normalized_total.item(), 5),
-            "Task": np.round(normalized_task.detach().cpu().numpy(), 5),
+            "Total": rts(normalized_total.item(), n=5),
+            "Task": rts(normalized_task.detach().cpu().numpy(), n=5),
         }
 
         group_losses = weighted_loss.get("Group")
         if group_losses:
             normalized_loss["Group"] = {
-                tag: round(loss_sum.div(weight_sum).item(), 5) if weight_sum.item() > 0.0 else 0.0
+                tag: rts(loss_sum.div(weight_sum).item(), n=5) if weight_sum.item() > 0.0 else 0.0
                 for tag, (loss_sum, weight_sum) in group_losses.items()
             }
 
         return normalized_loss
-
-    def mw_metrics(self, y_true: Tensor, y_pred: Tensor, y_wgts: Tensor) -> Dict[str, Any]:
-        """
-        Calculate overall and task-level weighted metrics for an epoch.
-        """
-        y_true_array = y_true.detach().cpu().numpy()
-        y_pred_array = y_pred.detach().cpu().numpy()
-        y_weight_array = y_wgts.detach().cpu().numpy()
-
-        total_metrics = self.score(
-            y_true=y_true_array.flatten(),
-            y_pred=y_pred_array.flatten(),
-            y_wgts=y_weight_array.flatten(),
-        )
-
-        task_metrics = {}
-        for task_index in range(self.num_task):
-            task_metrics[f"Task_{task_index}"] = self.score(
-                y_true=y_true_array[:, task_index].flatten(),
-                y_pred=y_pred_array[:, task_index].flatten(),
-                y_wgts=y_weight_array[:, task_index].flatten(),
-            )
-
-        return {"Total": total_metrics, "Task": task_metrics}
 
     @staticmethod
     def pack_epoch_data(epoch_data: Dict[str, List[Tensor]]) -> Dict[str, Tensor]:
@@ -619,9 +730,10 @@ class MMUnit(nn.Module, ABC):
 
         self.optimizer = optimizer_class(self.parameters(), **(optimizer_params or {}))
 
-    def set_scheduler(self, scheduler_class: Any, scheduler_params: Optional[dict] = None) -> None:
+    def set_scheduler(self, scheduler_class: Any = torch.optim.lr_scheduler.ReduceLROnPlateau,
+                      scheduler_params: Optional[dict] = None) -> None:
         """
-        Instantiate a learning-rate scheduler for the configured optimizer.
+        Instantiate a learning-rate scheduler for the configured optimizer. Default is ReduceLROnPlateau.
         """
         if self.optimizer is None:
             raise ValueError("Set the optimizer before configuring a scheduler.")
@@ -665,13 +777,16 @@ class MMUnit(nn.Module, ABC):
 
         self.load_state_dict(self.best_state_dict)
 
-    def save(self, path: str) -> None:
+    def save(self, path: Path | str) -> None:
         """
         Save model, optimizer, scheduler, and hyperparameter states.
         """
-        extension = os.path.splitext(path)[1].lower()
-        if extension not in {".pt", ".pth"}:
-            raise ValueError(f"Unsupported file extension: {extension}")
+        path = Path(path).expanduser().resolve()
+
+        if path.suffix.lower() not in {".pt", ".pth"}:
+            raise ValueError(f"Unsupported file extension: {path.suffix}")
+
+        path.parent.mkdir(parents=True, exist_ok=True)
 
         checkpoint = {
             "model_state_dict": self.state_dict(),
@@ -682,16 +797,29 @@ class MMUnit(nn.Module, ABC):
                 self.scheduler.state_dict() if self.scheduler is not None else None
             ),
             "hyperparameters": self.hyperparameters,
+            "epoch": self.epoch,
+            "best_epoch": self.best_epoch,
+            "best_state_dict": self.best_state_dict,
+            "best_train_loss": self.best_train_loss,
+            "best_val_loss": self.best_val_loss,
+            "logs": dict(self.logs),
+            "numpy_rng_state": np.random.get_state(),
+            "torch_rng_state": torch.get_rng_state(),
+            "cuda_rng_state_all": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
         }
-        torch.save(checkpoint, path)
+        torch.save(checkpoint, str(path))
 
     def load(self, path: str) -> None:
         """
         Load available model, optimizer, and scheduler state from a checkpoint.
         """
-        extension = os.path.splitext(path)[1].lower()
-        if extension not in {".pt", ".pth"}:
-            raise ValueError(f"Unsupported file extension: {extension}")
+        path = Path(path).expanduser().resolve()
+
+        if not path.is_file():
+            raise ValueError(f"Path does not exist: {path}")
+
+        if path.suffix.lower() not in {".pt", ".pth"}:
+            raise ValueError(f"Unsupported file extension: {path.suffix}")
 
         checkpoint = torch.load(path, map_location=self.device)
         self.load_state_dict(checkpoint["model_state_dict"])
@@ -705,14 +833,35 @@ class MMUnit(nn.Module, ABC):
             self.scheduler.load_state_dict(scheduler_state)
 
         self.hyperparameters = checkpoint.get("hyperparameters", {})
+        self.epoch = checkpoint["epoch"]
+        self.best_epoch = checkpoint["best_epoch"]
+        self.best_state_dict = checkpoint["best_state_dict"]
+        self.best_train_loss = checkpoint.get("best_train_loss", None)
+        self.best_val_loss = checkpoint.get("best_val_loss", None)
+        self.logs = defaultdict(list, checkpoint.get("logs", {}))
 
-    @staticmethod
-    def set_seed(seed: int = 42) -> None:
+        numpy_rng_state = checkpoint.get("numpy_rng_state")
+        if numpy_rng_state is not None:
+            np.random.set_state(numpy_rng_state)
+
+        torch_rng_state = checkpoint.get("torch_rng_state")
+        if torch_rng_state is not None:
+            torch.set_rng_state(torch_rng_state)
+
+        cuda_rng_state_all = checkpoint.get("cuda_rng_state_all")
+        if cuda_rng_state_all is not None and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(cuda_rng_state_all)
+
+    def set_seed(self, seed: int = 42) -> None:
         """
         Set NumPy and PyTorch random seeds.
         """
         np.random.seed(seed)
         torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
+        self.numpy_rng_state = np.random.get_state()
+        self.torch_rng_state = torch.get_rng_state()
 
 
 class MMClassificationUnit(MMUnit):
@@ -757,6 +906,39 @@ class MMClassificationUnit(MMUnit):
             Model predictions with shape `(batch_size, num_task)`.
         """
 
+    def _score_slice(self, y_true: npt.NDArray, logits: npt.NDArray, y_wgts: npt.NDArray) -> Dict[str, float]:
+        y_true, logits, y_wgts = self._mask_metric_data(
+            y_true=y_true.ravel(),
+            y_pred=logits.ravel(),
+            y_wgts=y_wgts.ravel(),
+        )
+
+        if y_true.size == 0:
+            return {}
+
+        y_score = 1.0 / (1.0 + np.exp(-logits))
+        y_pred = (y_score >= 0.5).astype(np.int64)
+
+        return self.score(y_true=y_true, y_pred=y_pred, y_wgts=y_wgts, y_score=y_score)
+
+    def mw_metrics(self, y_true: Tensor, y_pred: Tensor, y_wgts: Tensor) -> Dict[str, Any]:
+        y_true_array = y_true.detach().cpu().numpy()
+        logits = y_pred.detach().cpu().numpy()
+        y_weight_array = y_wgts.detach().cpu().numpy()
+
+        total_metrics = self._score_slice(y_true=y_true_array, logits=logits, y_wgts=y_weight_array)
+
+        task_metrics = {
+            f"Task_{task_index}": self._score_slice(
+                y_true=y_true_array[:, task_index],
+                logits=logits[:, task_index],
+                y_wgts=y_weight_array[:, task_index],
+            )
+            for task_index in range(self.num_task)
+        }
+
+        return {"Total": total_metrics, "Task": task_metrics}
+
     @staticmethod
     def score(y_true: npt.NDArray, y_pred: npt.NDArray, y_wgts: Optional[npt.NDArray] = None,
               y_score: Optional[npt.NDArray] = None):
@@ -776,13 +958,16 @@ class MMClassificationUnit(MMUnit):
 
         Returns
         -------
-        dict
+        Dict[str, float]
         """
+
+        if len(np.unique(y_true)) != 2:
+            warnings.warn(f"Found batch with with num_classes != 2", UserWarning)
 
         def safe_div(numerator, denominator, default_=0.0):
             return numerator / denominator if denominator != 0 else default_
 
-        conf_mat = confusion_matrix(y_true, y_pred, sample_weight=y_wgts)
+        conf_mat = confusion_matrix(y_true, y_pred, sample_weight=y_wgts, labels=[0, 1])
 
         TN, FP, FN, TP = conf_mat.ravel()
 
@@ -790,27 +975,34 @@ class MMClassificationUnit(MMUnit):
         spec = safe_div(TN, TN + FP)
 
         metrics = {
-            'TP': TP,
-            'FP': FP,
-            'FN': FN,
-            'TN': TN,
-            'Accuracy': rts(safe_div(TP + TN, TP + TN + FP + FN), 5),
-            'Recall': rts(rec, 5),
-            'Specificity': rts(spec, 5),
-            'Precision': rts(safe_div(TP, TP + FP), 5),
-            'Balanced Accuracy': rts((rec + spec) / 2, 5),
-            'GeomRS': rts(np.sqrt(rec * spec), 5),
-            'HarmRS': rts(safe_div(2 * rec * spec, rec + spec), 5),
-            'F1 Score': rts(safe_div(2 * TP, 2 * TP + FP + FN), 5),
-            'MCC': rts(safe_div((TP * TN) - (FP * FN), np.sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))), 5),
+            "TP": TP,
+            "FP": FP,
+            "FN": FN,
+            "TN": TN,
+            "Accuracy": rts(safe_div(TP + TN, TP + TN + FP + FN), n=5),
+            "Recall": rts(rec, n=5),
+            "Specificity": rts(spec, n=5),
+            "Precision": rts(safe_div(TP, TP + FP), n=5),
+            "Balanced Accuracy": rts((rec + spec) / 2, n=5),
+            "GeomRS": rts(np.sqrt(rec * spec), n=5),
+            "HarmRS": rts(safe_div(2 * rec * spec, rec + spec), n=5),
+            "F1 Score": rts(safe_div(2 * TP, 2 * TP + FP + FN), n=5),
+            "MCC": rts(safe_div((TP * TN) - (FP * FN), np.sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))), n=5),
         }
 
-        if y_score is not None:
+        if y_score is not None and np.unique(y_true).size == 2:
             metrics.update({
-                "ROC AUC": rts(roc_auc_score(y_true, y_score, sample_weight=y_wgts), 5),
-                'PRC AUC': rts(average_precision_score(y_true=y_true, y_score=y_score, sample_weight=y_wgts), 5),
-                'Brier': rts(brier_score_loss(y_true=y_true, y_proba=y_score, sample_weight=y_wgts), 5),
-                'ECE': rts(ece_score(y_true=y_true, y_score=y_score, sample_weight=y_wgts), 5)
+                "ROC AUC": rts(roc_auc_score(y_true, y_score, sample_weight=y_wgts), n=5),
+                "PRC AUC": rts(average_precision_score(y_true=y_true, y_score=y_score, sample_weight=y_wgts), n=5),
+                "Brier": rts(brier_score_loss(y_true=y_true, y_proba=y_score, sample_weight=y_wgts), n=5),
+                "ECE": rts(ece_score(y_true=y_true, y_score=y_score, sample_weight=y_wgts), n=5)
+            })
+        else:
+            metrics.update({
+                "ROC AUC": np.nan,
+                "PRC AUC": np.nan,
+                "Brier": np.nan,
+                "ECE": np.nan,
             })
 
         return metrics
@@ -858,6 +1050,40 @@ class MMRegressionUnit(MMUnit):
             Model predictions with shape `(batch_size, num_task)`.
         """
 
+    def _score_slice(self, y_true: npt.NDArray, y_pred: npt.NDArray, y_wgts: npt.NDArray) -> Dict[str, float]:
+        y_true, y_pred, y_wgts = self._mask_metric_data(
+            y_true=y_true.ravel(),
+            y_pred=y_pred.ravel(),
+            y_wgts=y_wgts.ravel(),
+        )
+
+        if y_true.size == 0:
+            return {}
+
+        return self.score(y_true=y_true, y_pred=y_pred, y_wgts=y_wgts)
+
+    def mw_metrics(self, y_true: Tensor, y_pred: Tensor, y_wgts: Tensor) -> Dict[str, Any]:
+        y_true_array = y_true.detach().cpu().numpy()
+        y_pred_array = y_pred.detach().cpu().numpy()
+        y_weight_array = y_wgts.detach().cpu().numpy()
+
+        total_metrics = self._score_slice(
+            y_true=y_true_array,
+            y_pred=y_pred_array,
+            y_wgts=y_weight_array,
+        )
+
+        task_metrics = {
+            f"Task_{task_index}": self._score_slice(
+                y_true=y_true_array[:, task_index],
+                y_pred=y_pred_array[:, task_index],
+                y_wgts=y_weight_array[:, task_index],
+            )
+            for task_index in range(self.num_task)
+        }
+
+        return {"Total": total_metrics, "Task": task_metrics}
+
     @staticmethod
     def score(y_true: npt.NDArray, y_pred: npt.NDArray, y_wgts: npt.NDArray):
         """
@@ -874,13 +1100,13 @@ class MMRegressionUnit(MMUnit):
 
         Returns
         -------
-        dict
+        Dict[str, float]
         """
 
         metrics = {
-            'R2': rts(r2_score(y_true=y_true, y_pred=y_pred, sample_weight=y_wgts), 5),
-            'MAE': rts(mean_absolute_error(y_true=y_true, y_pred=y_pred, sample_weight=y_wgts), 5),
-            'RMSE': rts(root_mean_squared_error(y_true=y_true, y_pred=y_pred, sample_weight=y_wgts), 5)
+            "R2": rts(r2_score(y_true=y_true, y_pred=y_pred, sample_weight=y_wgts), n=5),
+            "MAE": rts(mean_absolute_error(y_true=y_true, y_pred=y_pred, sample_weight=y_wgts), n=5),
+            "RMSE": rts(root_mean_squared_error(y_true=y_true, y_pred=y_pred, sample_weight=y_wgts), n=5)
         }
 
         return metrics
