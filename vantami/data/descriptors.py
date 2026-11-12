@@ -1,5 +1,6 @@
 from __future__ import annotations
-import os, json, joblib
+
+import json, joblib, subprocess
 from itertools import chain
 from typing import Union, List, Iterable
 from importlib.resources import files
@@ -1379,7 +1380,6 @@ def dataframe_2_mapc(df: pl.DataFrame, smiles_col: str = "SMILES", output_col: s
         Journal of Cheminformatics, Vol. 16, Art. 53 (2024), https://doi.org/10.1021/acs.jcim.6c01542
     [2] Implementation: https://github.com/markusorsi/mapchiral
     """
-
     smiles, n_jobs, smiles_batches = batch_data(
         data=df[smiles_col].drop_nulls().unique(maintain_order=True).to_list(), n_jobs=n_jobs, batch_size=batch_size
     )
@@ -1645,7 +1645,7 @@ def dataframe_2_cddd(df, cddd_paths: str, smiles_col: str = "SMILES",
     df.loc[:, smiles_col] = df[smiles_col].apply(lambda entry: " : ".join(entry) if isinstance(entry, list) else entry)
     df.to_csv(paths["input"], sep="\t", header=True, index=False)
 
-    os.system(command)
+    subprocess.run(command)
 
     df = joblib.load(paths["output"])
     df.loc[:, descriptor_col] = df[descriptor_col].apply(postprocess, decimals_=decimals)

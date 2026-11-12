@@ -26,17 +26,17 @@ def butina_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = "
 
     Parameters
     ----------
-    df : pl.DataFrame
+    df: pl.DataFrame
         Input DataFrame
-    features_col : str, optional
+    features_col: str, optional
         Name of the column containing features. Default is ECFP.
-    metric : str, optional
+    metric: str, optional
         Metric passed to distance_matrix. Default is "jaccard"
-    n_jobs : int, optional
+    n_jobs: int, optional
         Number of parallel jobs used for distance calculation.
-    batch_size : int, optional
+    batch_size: int, optional
         Number of rows assigned to one distance-calculation batch. Default is 1024.
-    threshold : float, optional
+    threshold: float, optional
         Distance threshold for defining neighbors. Two entries are neighbors
         when their distance is less than or equal to this value. Default is 0.3.
 
@@ -62,7 +62,7 @@ def butina_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = "
     ).astype(bool, copy=False)
 
     seen = np.zeros(n_samples, dtype=bool)
-    cluster_ids = np.full(n_samples, -1, dtype=np.int64)
+    labels = np.full(n_samples, -1, dtype=np.int64)
 
     neighbor_counts = neighbor_mask.sum(axis=1, dtype=np.int64)
 
@@ -77,7 +77,7 @@ def butina_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = "
         most_neighbors_idx = int(np.argmax(candidate_counts))
 
         if candidate_counts[most_neighbors_idx] == 0:
-            cluster_ids[unassigned_indices] = np.arange(
+            labels[unassigned_indices] = np.arange(
                 current_cluster_id,
                 current_cluster_id + len(unassigned_indices),
                 dtype=np.int64,
@@ -89,7 +89,7 @@ def butina_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = "
         )
         cluster_members = np.unique(np.append(cluster_members, most_neighbors_idx))
 
-        cluster_ids[cluster_members] = current_cluster_id
+        labels[cluster_members] = current_cluster_id
         seen[cluster_members] = True
 
         removed_edge_counts = neighbor_mask[:, cluster_members].sum(
@@ -102,10 +102,10 @@ def butina_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = "
 
         current_cluster_id += 1
 
-    return df.with_columns(pl.Series("Cluster", cluster_ids))
+    return df.with_columns(pl.Series(name="Cluster", values=labels))
 
 
-def murcko_cluster(df: pl.DataFrame, smiles_col: str = 'SMILES', generic: bool = False):
+def murcko_cluster(df: pl.DataFrame, smiles_col: str = "SMILES", generic: bool = False):
     """
     Cluster molecules based on their (generic) Murcko Scaffolds. Molecules for which a scaffold cannot be generated
     are assigned to a single cluster.
@@ -148,7 +148,7 @@ def murcko_cluster(df: pl.DataFrame, smiles_col: str = 'SMILES', generic: bool =
     return df
 
 
-def cc_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = 'jaccard',
+def cc_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = "jaccard",
                n_jobs: int = 1, batch_size: int = 1024, threshold: float = 0.3):
     """
     Cluster molecules using connected components graphs.
@@ -160,7 +160,7 @@ def cc_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = 'jacc
     features_col: str
         Name of the column with features. Default is ECFP
     metric: str, optional
-        The distance metric to use. Default is 'jaccard'.
+        The distance metric to use. Default is "jaccard".
         See scipy.spatial.distance.cdist for a list of supported metrics.
     n_jobs: int
         Number of cores to use. Default is 1.
@@ -199,11 +199,11 @@ def cc_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = 'jacc
 
     _, labels = connected_components(adj_sparse, directed=False, return_labels=True)
 
-    return df.with_columns(pl.Series('Cluster', labels))
+    return df.with_columns(pl.Series(name="Cluster", values=labels))
 
 
-def dbscan_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = 'jaccard', n_jobs: int = 1,
-                   batch_size: int = 1024, threshold: float = 0.3, kwargs: dict = None):
+def dbscan_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = "jaccard", n_jobs: int = 1,
+                   batch_size: int = 1024, threshold: float = 0.3, kwargs: dict | None = None):
     """
     Cluster molecules using the DBSCAN approach.
 
@@ -214,7 +214,7 @@ def dbscan_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = '
     features_col: str
         Name of the column with features. Default is ECFP
     metric: str, optional
-        The distance metric to use. Default is 'jaccard'.
+        The distance metric to use. Default is "jaccard".
         See scipy.spatial.distance.cdist for a list of supported metrics.
     n_jobs: int
         Number of cores to use. Default is 1.
@@ -289,11 +289,11 @@ def dbscan_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = '
 
     labels = model.fit_predict(distances)
 
-    return df.with_columns(pl.Series('Cluster', labels))
+    return df.with_columns(pl.Series(name="Cluster", values=labels))
 
 
-def hdbscan_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = 'jaccard', n_jobs: int = 1,
-                    batch_size: int = 1024, threshold: float = 0.3, kwargs: dict = None):
+def hdbscan_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = "jaccard", n_jobs: int = 1,
+                    batch_size: int = 1024, threshold: float = 0.3, kwargs: dict | None = None):
     """
     Cluster molecules using the HDBSCAN approach.
 
@@ -304,7 +304,7 @@ def hdbscan_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = 
     features_col: str
         Name of the column with features. Default is ECFP
     metric: str, optional
-        The distance metric to use. Default is 'jaccard'.
+        The distance metric to use. Default is "jaccard".
         See scipy.spatial.distance.cdist for a list of supported metrics.
     n_jobs: int
         Number of cores to use. Default is 1.
@@ -365,11 +365,11 @@ def hdbscan_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = 
 
     labels = model.fit_predict(distances)
 
-    return df.with_columns(pl.Series('Cluster', labels))
+    return df.with_columns(pl.Series(name="Cluster", values=labels))
 
 
-def agglomerative_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = 'jaccard', n_jobs: int = 1,
-                          batch_size: int = 1024, threshold: float = 0.3, kwargs: dict = None):
+def agglomerative_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = "jaccard", n_jobs: int = 1,
+                          batch_size: int = 1024, threshold: float = 0.3, kwargs: dict | None = None):
     """
     Cluster molecules using the agglomerative clustering approach.
 
@@ -380,7 +380,7 @@ def agglomerative_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: 
     features_col: str
         Name of the column with features. Default is ECFP
     metric: str, optional
-        The distance metric to use. Default is 'jaccard'.
+        The distance metric to use. Default is "jaccard".
         See scipy.spatial.distance.cdist for a list of supported metrics.
     n_jobs: int
         Number of cores to use. Default is 1.
@@ -440,11 +440,11 @@ def agglomerative_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: 
 
     labels = model.fit_predict(distances)
 
-    return df.with_columns(pl.Series('Cluster', labels))
+    return df.with_columns(pl.Series(name="Cluster", values=labels))
 
 
-def spectral_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = 'jaccard', n_jobs: int = 1,
-                     batch_size: int = 1024, threshold: float = 0.3, n_clusters: int = 2, kwargs: dict = None):
+def spectral_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = "jaccard", n_jobs: int = 1,
+                     batch_size: int = 1024, threshold: float = 0.3, n_clusters: int = 2, kwargs: dict | None = None):
     """
     Cluster molecules using the spectral clustering approach.
 
@@ -455,7 +455,7 @@ def spectral_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str =
     features_col: str
         Name of the column with features. Default is ECFP
     metric: str, optional
-        The distance metric to use. Default is 'jaccard'.
+        The distance metric to use. Default is "jaccard".
         See scipy.spatial.distance.cdist for a list of supported metrics.
     n_jobs: int
         Number of cores to use. Default is 1.
@@ -535,12 +535,12 @@ def spectral_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str =
 
     labels = model.fit_predict(affinity)
 
-    return df.with_columns(pl.Series('Cluster', labels))
+    return df.with_columns(pl.Series(name="Cluster", values=labels))
 
 
-def optics_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = 'jaccard', n_jobs: int = 1,
+def optics_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = "jaccard", n_jobs: int = 1,
                    threshold: float = 0.3, cluster_method: str = "dbscan",
-                   cluster_threshold: float = None, kwargs: dict = None):
+                   cluster_threshold: float | None = None, kwargs: dict | None = None):
     """
     Cluster molecules using the OPTICS approach.
 
@@ -551,17 +551,17 @@ def optics_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = '
     features_col: str
         Name of the column with features. Default is ECFP
     metric: str, optional
-        The distance metric to use. Default is 'jaccard'.
+        The distance metric to use. Default is "jaccard".
         See scipy.spatial.distance.cdist for a list of supported metrics.
     n_jobs: int
         Number of cores to use. Default is 1.
     threshold: float
         Distance threshold. Edge is set if distance <= threshold. Default is 0.3
     cluster_method: str
-        Clustering method to use. Default is 'dbscan'.
+        Clustering method to use. Default is "dbscan".
     cluster_threshold: float
-        Clustering threshold to use. If cluster_method == 'dbscan' corresponds to the eps argument.
-        If cluster_method == 'xi', it corresponds to the xi argument.
+        Clustering threshold to use. If cluster_method == "dbscan" corresponds to the eps argument.
+        If cluster_method == "xi", it corresponds to the xi argument.
     kwargs: dict
         Additional keyword arguments passed to OPTICS.
 
@@ -606,7 +606,7 @@ def optics_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = '
         if cluster_threshold is not None:
             default_kwargs["xi"] = cluster_threshold
     else:
-        raise ValueError("cluster_method must be one of: 'dbscan', 'xi'")
+        raise ValueError("cluster_method must be one of: `dbscan`, `xi`")
 
     array = np.vstack(_to_arrays(df, features_col))
 
@@ -620,10 +620,10 @@ def optics_cluster(df: pl.DataFrame, features_col: str = "ECFP", metric: str = '
 
     labels = model.fit_predict(array)
 
-    return df.with_columns(pl.Series('Cluster', labels))
+    return df.with_columns(pl.Series("Cluster", labels))
 
 
-def kmeans_cluster(df: pl.DataFrame, features_col: str = "RDKit", n_clusters: int = 3, kwargs: dict = None):
+def kmeans_cluster(df: pl.DataFrame, features_col: str = "RDKit", n_clusters: int = 3, kwargs: dict | None = None):
     """
     Cluster molecules using the KMeans approach.
 

@@ -1,6 +1,7 @@
 import re
 from math import floor
 from typing import List
+import warnings
 
 import numpy as np
 import numpy.typing as npt
@@ -25,6 +26,8 @@ class SimpleClipper:
         self.stds = None
         self.means = None
         self.fitted_ = False
+        self.a_min = None
+        self.a_max = None
 
     def fit(self, x_array: npt.NDArray):
         self.stds = np.nanstd(x_array, axis=0)
@@ -35,8 +38,8 @@ class SimpleClipper:
         return self
 
     def transform(self, x_array: npt.NDArray):
-        if self.fitted_ is False:
-            raise RuntimeError('Clipper has not been fit yet. Please call .fit() first.')
+        if not self.fitted_:
+            raise RuntimeError("Clipper has not been fit yet. Please call .fit() first.")
 
         return np.clip(a=x_array, a_min=self.a_min, a_max=self.a_max)
 
@@ -59,6 +62,8 @@ class MADClipper:
         self.mads = None
         self.medians = None
         self.fitted_ = False
+        self.a_min = None
+        self.a_max = None
 
     def fit(self, x_array: npt.NDArray):
         self.medians = np.nanmedian(x_array, axis=0)
@@ -69,8 +74,8 @@ class MADClipper:
         return self
 
     def transform(self, x_array: npt.NDArray):
-        if self.fitted_ is False:
-            raise RuntimeError('Clipper has not been fit yet. Please call .fit() first.')
+        if not self.fitted_:
+            raise RuntimeError("Clipper has not been fit yet. Please call .fit() first.")
 
         return np.clip(a=x_array, a_min=self.a_min, a_max=self.a_max)
 
@@ -94,6 +99,8 @@ class QuantileClipper:
         self.lower_quantile = lower_quantile
         self.upper_quantile = upper_quantile
         self.fitted_ = False
+        self.a_min = None
+        self.a_max = None
 
     def fit(self, x_array: npt.NDArray):
         self.a_min = np.nanquantile(x_array, self.lower_quantile, axis=0)
@@ -102,8 +109,8 @@ class QuantileClipper:
         return self
 
     def transform(self, x_array: npt.NDArray):
-        if self.fitted_ is False:
-            raise RuntimeError('Clipper has not been fit yet. Please call .fit() first.')
+        if not self.fitted_:
+            raise RuntimeError("Clipper has not been fit yet. Please call .fit() first.")
 
         return np.clip(a=x_array, a_min=self.a_min, a_max=self.a_max)
 
@@ -161,7 +168,6 @@ class DataTransformer:
         self.corr_fit = False
         self.scaler_fit = False
         self.frac_missing_ = 0.05
-        self.frac_large_ = 0.05
         self.large_threshold_ = 1e12
         self.random_state_ = 42
 
@@ -188,6 +194,12 @@ class DataTransformer:
 
         if x_array.ndim == 0 or x_array.ndim > 2:
             raise ValueError(f"Features must be one- or two-dimensional, got {x_array.ndim} dimensions instead.")
+
+        if x_array.shape[0] == 0:
+            raise ValueError(f"Features must contain at least one sample")
+
+        if x_array.shape[1] == 0:
+            raise ValueError(f"Features must contain at least one feature")
 
         if x_array.ndim == 1:
             x_array = x_array.reshape(1, -1)
@@ -218,7 +230,8 @@ class DataTransformer:
     @staticmethod
     def raise_zero(x_array: npt.NDArray, step: str = ""):
         """
-        Raise an error if the array has zero remaining columns
+        Raise an error if the array has zero remaining columns.
+
         Parameters
         ----------
         x_array: npt.NDArray
@@ -229,7 +242,7 @@ class DataTransformer:
 
     def reset(self):
         """
-        Reset the fitted objects while retaining the set  parameters. Returns self.
+        Reset the fitted objects while retaining the set parameters.
         """
         self.masks = {}
         self.clipper = None
@@ -258,16 +271,18 @@ class DataTransformer:
             Whether to update existing masks if already fit.
         """
         if self.masks_fit and not update:
-            raise RuntimeError('Cannot fit masks twice. To overwrite this setting, set update to True.')
+            raise RuntimeError("Cannot fit masks twice. To overwrite this setting, set update to True.")
 
         x_array = self.validate_features(x_array)
 
-        self.masks['missing'] = np.isnan(x_array).mean(axis=0) > self.frac_missing_
-        self.masks['large'] = (np.abs(x_array) > self.large_threshold_).mean(axis=0) > self.frac_large_
-        self.masks['infinite'] = np.isinf(x_array).any(axis=0)
-        self.masks['zero'] = np.nanvar(x_array, axis=0) == 0
+        self.masks["missing"] = np.isnan(x_array).mean(axis=0) > self.frac_missing_
+        self.masks["large"] = (np.abs(x_array) > self.large_threshold_).any(axis=0)
+        self.masks["infinite"] = np.isinf(x_array).any(axis=0)
+        self.masks["zero"] = np.nanvar(x_array, axis=0) == 0
 
-        self.masks['combined'] = ~(self.masks['missing'] | self.masks['infinite'] | self.masks['zero'] | self.masks['large'])
+        self.masks["combined"] = ~(
+                self.masks["missing"] | self.masks["infinite"] | self.masks["zero"] | self.masks["large"]
+        )
         self.masks_fit = True
 
     def apply_masks(self, x_array: npt.NDArray):
@@ -286,10 +301,10 @@ class DataTransformer:
         """
 
         if not self.masks_fit:
-            raise RuntimeError('Masks have not been fit yet. Please call .fit_masks() first.')
+            raise RuntimeError("Masks have not been fit yet. Please call .fit_masks() first.")
 
         x_array = self.validate_features(x_array)
-        x_array = x_array[:, self.masks['combined']]
+        x_array = x_array[:, self.masks["combined"]]
 
         return x_array
 
@@ -310,7 +325,7 @@ class DataTransformer:
         """
 
         if self.corr_fit and not update:
-            raise RuntimeError('Cannot fit correlation mask twice. To overwrite this setting, set update to True.')
+            raise RuntimeError("Cannot fit correlation mask twice. To overwrite this setting, set update to True.")
 
         if not np.isfinite(threshold) or not 0.0 < threshold <= 1.0:
             raise ValueError("threshold must be finite and between 0 and 1.")
@@ -318,13 +333,22 @@ class DataTransformer:
         if not np.isfinite(frac) or not 0.0 < frac <= 1.0:
             raise ValueError("frac must be finite and in the interval (0, 1].")
 
+        if not np.isfinite(x_array).all():
+            raise ValueError("Correlation analysis requires finite values.")
+
         x_array = self.validate_features(x_array)
         n_samples, n_features = x_array.shape
 
         if n_samples < 2:
             raise ValueError("At least two samples are required for correlation analysis.")
 
-        self.masks['correlation'] = np.ones(x_array.shape[1], dtype=bool)
+        if n_features == 1:
+            warnings.warn(f"Single feature was submitted for correlation analysis.", UserWarning, stacklevel=2)
+            self.masks["correlation"] = np.ones(1, dtype=bool)
+            self.corr_fit = True
+            return
+
+        self.masks["correlation"] = np.ones(x_array.shape[1], dtype=bool)
 
         sample_size = max(floor(x_array.shape[0] * frac), 2)
         rng = np.random.default_rng(seed=self.random_state_)
@@ -340,31 +364,30 @@ class DataTransformer:
             return
 
         df = pl.DataFrame({
-            'Idx1': rows,
-            'Idx2': cols,
-            'Correlation': [correlation_matrix[row, col] for row, col in zip(rows, cols)]
-        }).sort('Correlation', descending=True)
+            "Idx1": rows,
+            "Idx2": cols,
+            "Correlation": [correlation_matrix[row, col] for row, col in zip(rows, cols)]
+        }).sort("Correlation", descending=True)
 
         while len(df) > 0:
-
             counts = (pl.concat([
-                df[['Idx1', 'Correlation']].rename({'Idx1': 'Idx'}),
-                df[['Idx2', 'Correlation']].rename({'Idx2': 'Idx'})
+                df[["Idx1", "Correlation"]].rename({"Idx1": "Idx"}),
+                df[["Idx2", "Correlation"]].rename({"Idx2": "Idx"})
             ])
-            .group_by('Idx')
+            .group_by("Idx")
             .agg([
-                pl.col('Correlation').len().alias('Count'),
-                pl.col('Correlation').mean().round(5).alias('Mean_Correlation')
+                pl.col("Correlation").len().alias("Count"),
+                pl.col("Correlation").mean().round(5).alias("Mean_Correlation")
             ])
-            .sort(['Count', 'Mean_Correlation'], descending=[True, True])
+            .sort(["Count", "Mean_Correlation"], descending=[True, True])
             )
 
-            max_corr_idx = counts['Idx'].item(0)
-            self.masks['correlation'][max_corr_idx] = False
+            max_corr_idx = counts["Idx"].item(0)
+            self.masks["correlation"][max_corr_idx] = False
 
             df = df.filter(
-                (pl.col('Idx1') != max_corr_idx) &
-                (pl.col('Idx2') != max_corr_idx)
+                (pl.col("Idx1") != max_corr_idx) &
+                (pl.col("Idx2") != max_corr_idx)
             )
 
         self.corr_fit = True
@@ -386,16 +409,16 @@ class DataTransformer:
         """
 
         if not self.corr_fit:
-            raise RuntimeError('Correlation mask has not been fit yet. Please call .fit_corr() first.')
+            raise RuntimeError("Correlation mask has not been fit yet. Please call .fit_corr() first.")
 
         x_array = self.validate_features(x_array)
-        x_array = x_array[:, self.masks['correlation']]
+        x_array = x_array[:, self.masks["correlation"]]
 
         return x_array
 
     def fit_clipper(self, x_array: npt.NDArray, update: bool = False):
         """
-        Fit a SimpleImputer for handling unstable values.
+        Fit a QuantileClipper for handling unstable values.
 
         Parameters
         -----------
@@ -405,7 +428,7 @@ class DataTransformer:
             Whether to update existing clipper if already fit.
         """
         if self.clipper_fit and not update:
-            raise RuntimeError('Cannot fit clipper twice. To overwrite this setting, set update to True.')
+            raise RuntimeError("Cannot fit clipper twice. To overwrite this setting, set update to True.")
 
         x_array = self.validate_features(x_array)
         self.clipper = QuantileClipper(lower_quantile=0.01, upper_quantile=0.99)
@@ -427,7 +450,7 @@ class DataTransformer:
             Feature array with clipped values.
         """
         if not self.clipper_fit:
-            raise RuntimeError('Clipper has not been fit yet. Please call .fit_clipper first.')
+            raise RuntimeError("Clipper has not been fit yet. Please call .fit_clipper first.")
 
         x_array = self.validate_features(x_array)
         x_array = self.clipper.transform(x_array)
@@ -446,10 +469,10 @@ class DataTransformer:
         """
 
         if self.imputer_fit and not update:
-            raise RuntimeError('Cannot fit imputer twice. To overwrite this setting, set update to True.')
+            raise RuntimeError("Cannot fit imputer twice. To overwrite this setting, set update to True.")
 
         x_array = self.validate_features(x_array)
-        self.imputer = SimpleImputer(strategy='median')
+        self.imputer = SimpleImputer(strategy="median")
         self.imputer.fit(x_array)
         self.imputer_fit = True
 
@@ -469,7 +492,7 @@ class DataTransformer:
         """
 
         if not self.imputer_fit:
-            raise RuntimeError('Imputer has not been fit yet. Please call .fit_imputer first.')
+            raise RuntimeError("Imputer has not been fit yet. Please call .fit_imputer first.")
 
         x_array = self.validate_features(x_array)
         x_array = self.imputer.transform(x_array)
@@ -490,7 +513,7 @@ class DataTransformer:
         """
 
         if self.selector_fit and not update:
-            raise RuntimeError('Cannot fit selector twice. To overwrite this setting, set update to True.')
+            raise RuntimeError("Cannot fit selector twice. To overwrite this setting, set update to True.")
 
         x_array = self.validate_features(x_array)
         self.selector = VarianceThreshold(selector_threshold)
@@ -513,7 +536,7 @@ class DataTransformer:
         """
 
         if not self.selector_fit:
-            raise RuntimeError('Selector has not been fit yet. Please call .fit_selector first.')
+            raise RuntimeError("Selector has not been fit yet. Please call .fit_selector first.")
 
         x_array = self.validate_features(x_array)
         x_array = self.selector.transform(x_array)
@@ -532,7 +555,7 @@ class DataTransformer:
         """
 
         if self.scaler_fit and not update:
-            raise RuntimeError('Cannot fit scaler twice. To overwrite this setting, set update to True.')
+            raise RuntimeError("Cannot fit scaler twice. To overwrite this setting, set update to True.")
 
         x_array = self.validate_features(x_array)
         self.scaler = RobustScaler(unit_variance=True, quantile_range=(5, 95))
@@ -555,7 +578,7 @@ class DataTransformer:
         """
 
         if not self.scaler_fit:
-            raise RuntimeError('Scaler has not been fit yet. Please call .fit_scaler first.')
+            raise RuntimeError("Scaler has not been fit yet. Please call .fit_scaler first.")
 
         x_array = self.validate_features(x_array)
         x_array = self.scaler.transform(x_array)
@@ -581,7 +604,7 @@ class DataTransformer:
         x_array = self.validate_features(x_array)
 
         if x_array.shape[1] != self.n_features["input"]:
-            raise ValueError(f"Expected the input data to have {self.n_features['input']} columns, got {x_array.shape[1]}")
+            raise ValueError(f'Expected the input data to have {self.n_features["input"]} columns, got {x_array.shape[1]}')
 
         if self.use_masks:
             x_array = self.apply_masks(x_array)
@@ -687,11 +710,14 @@ class DataTransformer:
         x_array = self.transform(x_array)
 
         df = df.with_columns(
-            pl.Series(features_col, [array.reshape(-1) for array in np.vsplit(x_array, x_array.shape[0])])
+            pl.Series(
+                name=features_col,
+                values=[array.reshape(-1) for array in np.vsplit(x_array, x_array.shape[0])],
+                dtype=pl.Array
+            )
         )
 
         return df
-
 
     def fit_transform_df(self, df: pl.DataFrame, features_col: str):
         """
@@ -717,7 +743,11 @@ class DataTransformer:
         x_array = self.fit_transform(x_array)
 
         df = df.with_columns(
-            pl.Series(features_col, [array.reshape(-1) for array in np.vsplit(x_array, x_array.shape[0])])
+            pl.Series(
+                name=features_col,
+                values=[array.reshape(-1) for array in np.vsplit(x_array, x_array.shape[0])],
+                dtype=pl.Array
+            )
         )
 
         return df
@@ -739,49 +769,49 @@ def get_transformer_params(features: str):
     """
 
     continuous = {
-        'use_masks': True,
-        'use_corr': True,
-        'use_imputer': True,
-        'use_selector': True,
-        'use_scaler': True,
-        'use_clipper': True,
+        "use_masks": True,
+        "use_corr": True,
+        "use_imputer": True,
+        "use_selector": True,
+        "use_scaler": True,
+        "use_clipper": True,
     }
 
     binary = {
-        'use_masks': True,
-        'use_corr': True,
-        'use_imputer': True,
-        'use_selector': True,
-        'use_scaler': False,
-        'use_clipper': True,
+        "use_masks": True,
+        "use_corr": True,
+        "use_imputer": True,
+        "use_selector": True,
+        "use_scaler": False,
+        "use_clipper": False,
     }
 
     integer = {
-        'use_masks': True,
-        'use_corr': True,
-        'use_imputer': False,
-        'use_selector': True,
-        'use_scaler': False,
-        'use_clipper': False,
+        "use_masks": True,
+        "use_corr": True,
+        "use_imputer": True,
+        "use_selector": True,
+        "use_scaler": False,
+        "use_clipper": False,
     }
 
     features_mapping = {
-        'AtomPair': binary,
-        'Daylight': binary,
-        'ECFP': binary,
-        'MACCS': binary,
-        'Klek': binary,
-        'Mordred': continuous,
-        'CDDD': continuous,
-        'ChemBERTa': continuous,
-        'RDKit': continuous,
-        'CDDD_internal': continuous,
-        'MiniMol': continuous,
-        'MAP': integer,
-        'MAPC': integer,
-        'AtomPairCount': integer,
-        'DaylightCount': integer,
-        'ECFPCount': integer,
+        "AtomPair": binary,
+        "Daylight": binary,
+        "ECFP": binary,
+        "MACCS": binary,
+        "Klek": binary,
+        "Mordred": continuous,
+        "CDDD": continuous,
+        "ChemBERTa": continuous,
+        "RDKit": continuous,
+        "CDDD_internal": continuous,
+        "MiniMol": continuous,
+        "MAP": integer,
+        "MAPC": integer,
+        "AtomPairCount": integer,
+        "DaylightCount": integer,
+        "ECFPCount": integer,
         "MiniLM": continuous,
         "Qwen3": continuous,
         "MolEncoder": continuous
@@ -790,13 +820,14 @@ def get_transformer_params(features: str):
     try:
         params = features_mapping[features].copy()
     except KeyError as exc:
-        raise KeyError(f'No parameters defined for < {features} >. Please, update the < get_transformer_params > '
-                       f'function at novami.data.transform') from exc
+        raise KeyError(
+            f"Parameters not defined for < {features} >. Update the < get_transformer_params > function"
+        ) from exc
 
     return params
 
 
-def merge_arrays_dataframe(df: pl.DataFrame, input_col: List[str], output_col: str):
+def merge_arrays_dataframe(df: pl.DataFrame, input_cols: List[str], output_col: str):
     """
     Merge numpy arrays held in polars columns of Array type.
 
@@ -804,7 +835,7 @@ def merge_arrays_dataframe(df: pl.DataFrame, input_col: List[str], output_col: s
     ----------
     df: pl.DataFrame
         Polars dataframe with arrays to merge
-    input_col: List[str]
+    input_cols: List[str]
         Names of columns holding arrays
     output_col: str
         Name for the output column
@@ -813,17 +844,17 @@ def merge_arrays_dataframe(df: pl.DataFrame, input_col: List[str], output_col: s
     -------
     pl.DataFrame
     """
-    if not input_col:
+    if not input_cols:
         raise ValueError(f"No input columns provided")
 
-    if missing_cols := [col for col in input_col if col not in df.columns]:
+    if missing_cols := [col for col in input_cols if col not in df.columns]:
         raise ValueError(f"Columns missing from the DataFrame: {missing_cols}")
 
-    if not all(type(df.schema[col]) is pl.Array for col in input_col):
+    if not all(isinstance(df.schema[col], pl.Array) for col in input_cols):
         raise TypeError("All input columns must be polars Arrays")
 
     dtypes = {str(df[col].dtype).split(",")[0].split("(")[-1]
-              for col in input_col}
+              for col in input_cols}
 
     precisions = sorted({int(re.search(r"(\d+)", dt).group(1)) for dt in dtypes})
 
@@ -845,7 +876,7 @@ def merge_arrays_dataframe(df: pl.DataFrame, input_col: List[str], output_col: s
     df = df.with_columns(
         pl.concat_arr([
             pl.col(col).cast(pl.Array(target_dtype, df.schema[col].shape[0]))
-            for col in input_col
+            for col in input_cols
         ]).alias(output_col)
     )
 

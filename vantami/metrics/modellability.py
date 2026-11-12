@@ -5,7 +5,6 @@ import pandas as pd
 from scipy.spatial.distance import cdist
 
 def modi_index(df: pd.DataFrame, desc_col: str, label_col: str, dist_function: str = 'jaccard'):
-
     df = df.reset_index(drop=True)
     desc_array = np.vstack(df[desc_col].to_numpy())
     dist_array = cdist(XA=desc_array, XB=desc_array, metric=dist_function)

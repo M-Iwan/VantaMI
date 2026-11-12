@@ -1,12 +1,9 @@
 from __future__ import annotations
-import os
-import math
-import json
+
 import joblib
 from itertools import chain
-from typing import Union, List
-from importlib.resources import files
-from joblib import Parallel, delayed, effective_n_jobs
+from typing import List
+from joblib import Parallel, delayed
 
 import numpy as np
 import numpy.typing as npt
@@ -22,37 +19,18 @@ def _from_hf(string: str, model, torch, decimals):
     return np.round(emb, decimals)
 
 
-def _prepare_batches_strings(df: pl.DataFrame, string_col: str, n_jobs: int, batch_size: int):
-    """
-    Prepare batches of strings for downstream processing.
-    """
-    if batch_size < 1:
-        raise ValueError(f"Batch size must be >= 1, got {batch_size} instead.")
-
-    strings = df[string_col].unique(maintain_order=True).to_list()
-    if not strings:
-        return [], 0, []
-
-    n_jobs = min(effective_n_jobs(n_jobs), len(strings))
-
-    n_batches = max(n_jobs, math.ceil(len(strings) / batch_size))
-    string_batches = np.array_split(strings, n_batches)
-
-    return strings, n_jobs, string_batches
-
-
-def string_2_minilm(string: Union[str, List[str], npt.NDArray[str]], decimals: int = 5):
+def string_2_minilm(string: str | List[str] | npt.NDArray[np.str_], decimals: int = 5):
     """
     Parameters
     ----------
-    string: Union[str, List[str], npt.NDArray[str]]
+    string: str | List[str] | npt.NDArray[str]
         An English sentence.
     decimals: int
         Number of decimals to keep.
 
     Returns
     -------
-    Union[np.ndarray, List[np.ndarray]]
+    npt.NDArray | List[npt.NDArray]
     """
     try:
         import torch
@@ -85,8 +63,8 @@ def string_2_minilm(string: Union[str, List[str], npt.NDArray[str]], decimals: i
         raise TypeError(f"Expected string to be str, List[str] or npt.NDArray[str], got {type(string)} instead")
 
 
-def dataframe_2_minilm(df: pl.DataFrame, string_col: str = 'String', output_col: str = 'MiniLM',
-                           decimals: int = 5, n_jobs: int = 1, batch_size: int = 512 ):
+def dataframe_2_minilm(df: pl.DataFrame, string_col: str = "String", output_col: str = "MiniLM",
+                       decimals: int = 5, n_jobs: int = 1, batch_size: int = 512, timeout: int | None = None):
     """
     Convert strings in a polars DataFrame to MiniLM embeddings.
 
@@ -104,6 +82,8 @@ def dataframe_2_minilm(df: pl.DataFrame, string_col: str = 'String', output_col:
         Number of cores to use for calculations.
     batch_size: int, optional
         Number of strings per batch.
+    timeout: int | None
+        Per-worker timeout for joblib parallelism
 
     Returns
     -------
@@ -113,19 +93,22 @@ def dataframe_2_minilm(df: pl.DataFrame, string_col: str = 'String', output_col:
 
     try:
         from vantami.cache import get_minilm_model_path
+        from vantami.data.descriptors import batch_data
     except ImportError as exc:
         raise ImportError(f"Function < dataframe_2_minilm > requires the MiniLM cache utilities:\n{exc}")
 
     if not get_minilm_model_path().is_file():
         get_minilm()
 
-    strings, n_jobs, string_batches = _prepare_batches_strings(
-        df=df, string_col=string_col, n_jobs=n_jobs, batch_size=batch_size
+    strings = df[string_col].drop_nulls().unique(maintain_order=True).to_list()
+
+    strings, n_jobs, string_batches = batch_data(
+        data=strings, n_jobs=n_jobs, batch_size=batch_size
     )
     if not strings:
         return df.with_columns(pl.lit(None).alias(output_col))
 
-    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=60, backend='loky')(
+    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=timeout, backend="loky")(
         delayed(string_2_minilm)(string=st, decimals=decimals) for st in string_batches
     )
 
@@ -134,13 +117,13 @@ def dataframe_2_minilm(df: pl.DataFrame, string_col: str = 'String', output_col:
             string_col: strings,
             output_col: list(chain.from_iterable(out))
         },
-        schema = {
+        schema={
             string_col: pl.String,
             output_col: pl.Array(pl.Float64, shape=384)
         }
     )
 
-    df = df.join(string_df, on=string_col, how='left')
+    df = df.join(string_df, on=string_col, how="left")
 
     return df
 
@@ -166,18 +149,18 @@ def get_minilm():
     }
 
 
-def string_2_qwen3(string: Union[str, List[str], npt.NDArray[str]], decimals: int = 5):
+def string_2_qwen3(string:str | List[str] | npt.NDArray[np.str_], decimals: int = 5):
     """
     Parameters
     ----------
-    string: Union[str, List[str], npt.NDArray[str]]
+    string: str | List[str] | npt.NDArray[str]
         An English sentence.
     decimals: int
         Number of decimals to keep.
 
     Returns
     -------
-    Union[np.ndarray, List[np.ndarray]]
+    np.ndarray | List[np.ndarray]
     """
     try:
         import torch
@@ -210,8 +193,8 @@ def string_2_qwen3(string: Union[str, List[str], npt.NDArray[str]], decimals: in
         raise TypeError(f"Expected string to be str, List[str] or npt.NDArray[str], got {type(string)} instead")
 
 
-def dataframe_2_qwen3(df: pl.DataFrame, string_col: str = 'String', output_col: str = 'Qwen3',
-                      decimals: int = 5, n_jobs: int = 1, batch_size: int = 256):
+def dataframe_2_qwen3(df: pl.DataFrame, string_col: str = "String", output_col: str = "Qwen3",
+                      decimals: int = 5, n_jobs: int = 1, batch_size: int = 256, timeout: int | None = None):
     """
     Convert strings in a polars DataFrame to Qwen3 embeddings.
 
@@ -229,6 +212,8 @@ def dataframe_2_qwen3(df: pl.DataFrame, string_col: str = 'String', output_col: 
         Number of cores to use for calculations.
     batch_size: int, optional
         Number of strings per batch.
+    timeout: int | None
+        Per-worker timeout for joblib parallelism
 
     Returns
     -------
@@ -238,19 +223,22 @@ def dataframe_2_qwen3(df: pl.DataFrame, string_col: str = 'String', output_col: 
 
     try:
         from vantami.cache import get_qwen3_model_path
+        from vantami.data.descriptors import batch_data
     except ImportError as exc:
         raise ImportError(f"Function < dataframe_2_qwen3 > requires the Qwen3 cache utilities:\n{exc}")
 
     if not get_qwen3_model_path().is_file():
         get_qwen3()
 
-    strings, n_jobs, string_batches = _prepare_batches_strings(
-        df=df, string_col=string_col, n_jobs=n_jobs, batch_size=batch_size
+    strings = df[string_col].drop_nulls().unique(maintain_order=True).to_list()
+
+    strings, n_jobs, string_batches = batch_data(
+        data=strings, n_jobs=n_jobs, batch_size=batch_size
     )
     if not strings:
         return df.with_columns(pl.lit(None).alias(output_col))
 
-    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=120, backend='loky')(
+    out = Parallel(n_jobs=n_jobs, verbose=1, timeout=timeout, backend="loky")(
         delayed(string_2_qwen3)(string=st, decimals=decimals) for st in string_batches
     )
 
@@ -259,13 +247,13 @@ def dataframe_2_qwen3(df: pl.DataFrame, string_col: str = 'String', output_col: 
             string_col: strings,
             output_col: list(chain.from_iterable(out))
         },
-        schema = {
+        schema={
             string_col: pl.String,
             output_col: pl.Array(pl.Float64, shape=1024)
         }
     )
 
-    df = df.join(string_df, on=string_col, how='left')
+    df = df.join(string_df, on=string_col, how="left")
 
     return df
 

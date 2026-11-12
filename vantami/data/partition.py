@@ -1,5 +1,5 @@
 import math
-from typing import List, Optional, Iterable, Any
+from typing import List, Iterable, Any
 from joblib import effective_n_jobs
 
 import numpy as np
@@ -22,7 +22,7 @@ def bin_data(data: Iterable[float], n_bins: int = 5):
     -------
     bins: List[int]
     """
-    quantiles = list(np.quantile(data, q=np.linspace(0, 1, n_bins+1)[1:-1]))
+    quantiles = list(np.quantile(data, q=np.linspace(0, 1, n_bins + 1)[1:-1]))
 
     def to_bin(value: float, qnts: List[float]):
         for idx, quantile in enumerate(qnts):
@@ -73,8 +73,8 @@ def batch_data(data: Iterable[Any], n_jobs: int = 1, batch_size: int = 256):
     return data, n_jobs, data_batches
 
 
-def validate_dataframe(df: pl.DataFrame, features_col: Optional[str] = None, target_col: Optional[str] = None,
-                       id_col: Optional[str] = None):
+def validate_dataframe(df: pl.DataFrame, features_col: str | None = None, target_col: str | None = None,
+                       id_col: str | None = None):
     """
     Validate the coherence of provided DataFrame.
 
@@ -82,11 +82,11 @@ def validate_dataframe(df: pl.DataFrame, features_col: Optional[str] = None, tar
     ----------
     df: pl.DataFrame
         A Polars DataFrame with data. Pandas DF will be internally cast to Polars DF.
-    features_col: str
+    features_col: str | None
         Column holding molecular features encoded using 1D numpy arrays.
-    target_col: str
+    target_col: str | None
         Column holding target values encoded using floats.
-    id_col: str
+    id_col: str | None
         Column holding unique identifiers for each entry. If None a column named MolID will be added.
 
     Returns
@@ -128,13 +128,6 @@ def validate_features(x_array: npt.NDArray):
     --------
     npt.NDArray
         Validated feature array, guaranteed to be 2-dimensional.
-
-    Raises
-    -------
-    TypeError
-        If input is not a numpy.ndarray.
-    ValueError
-        If input has more than 2 dimensions.
     """
 
     if not isinstance(x_array, np.ndarray):
@@ -162,13 +155,6 @@ def validate_targets(y_array: npt.NDArray):
     --------
     npt.NDArray
         Validated target array, guaranteed to be 1-dimensional.
-
-    Raises
-    -------
-    TypeError
-        If input is not a numpy.ndarray.
-    ValueError
-        If input has more than 2 dimensions or is a 2D array with more than 1 column.
     """
 
     if not isinstance(y_array, np.ndarray):
@@ -271,7 +257,8 @@ def stratified_train_test_split(df: pl.DataFrame, fraction: float, strat_col: st
     return train_df, test_df
 
 
-def minimal_train_test_split(df: pl.DataFrame, fraction: float, tolerance: float = 0.05, cluster_col: str = "Cluster"):
+def minimal_train_test_split(df: pl.DataFrame, fraction: float, tolerance: float = 0.05,
+                             cluster_col: str = "Cluster"):
     """
     Split the pre-defined clusters into training and testing data, assigning the smallest clusters to the test set.
 

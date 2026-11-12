@@ -1,7 +1,7 @@
 import inspect
 import joblib
 from abc import ABC, abstractmethod
-from typing import Optional, List, Dict, Union
+from typing import Optional, List, Dict
 
 import numpy as np
 import numpy.typing as npt
@@ -16,9 +16,9 @@ from vantami.data.embed import Embedder
 from vantami.ml.score import ece_score
 from vantami.stats.utils import round_to_significant as rts
 
-Transformer = Union[DataTransformer, Embedder]
+Transformer = DataTransformer | Embedder
 TransformerSequence = List[Transformer]
-TransformerType = Dict[str, Optional[Union[Transformer, TransformerSequence]]]
+TransformerType = Dict[str, Transformer | TransformerSequence | None]
 
 
 class Unit(ABC):
@@ -27,14 +27,14 @@ class Unit(ABC):
     data preprocessing, model training, and inference.
 
     This abstract base class provides a framework for building standardized machine learning workflows with
-    automatic data validation, feature selection, and scaling capabilities.
-    Each transformation stage can be individually enabled or disabled.
+    automatic data validation, feature selection, and scaling capabilities. Each transformation stage can
+    be individually enabled or disabled.
 
     Parameters
     ----------
     model: object
         A scikit-learn compatible model with at least .fit() and .predict() methods.
-    transformer: Dict[str, Union[Transformer, List[Transformer]]]
+    transformer: TransformerType
         Transformer(s) responsible for pre-processing training data, connected to input features.
 
     Methods
@@ -62,7 +62,7 @@ class Unit(ABC):
     Multi-modality/multi-transformations added in version 0.5.0
     """
 
-    def __init__(self, model, transformer: Optional[TransformerType] = None):
+    def __init__(self, model, transformer: TransformerType | None = None):
         """
         Initialize the Unit object.
 
@@ -70,7 +70,7 @@ class Unit(ABC):
         ----------
         model: object
             A scikit-learn compatible model with at least .fit() and .predict() methods.
-        transformer: Optional[TransformerType]
+        transformer: TransformerType | None
             Mapping from feature-group names to transformers, lists of transformers, or None.
             If None, all feature groups are passed through without preprocessing.
         """
@@ -98,7 +98,7 @@ class Unit(ABC):
 
         self.metrics = {}
         self._model_fit = False
-        self._has_weights = 'sample_weight' in inspect.signature(self.model.fit).parameters
+        self._has_weights = "sample_weight" in inspect.signature(self.model.fit).parameters
         self._task = None
 
     def __repr__(self):
@@ -119,6 +119,12 @@ class Unit(ABC):
 
         if x_array.ndim == 0 or x_array.ndim > 2:
             raise ValueError(f"Features must be one- or two-dimensional, got {x_array.ndim} dimensions instead.")
+
+        if x_array.shape[0] == 0:
+            raise ValueError(f"Features must contain at least one sample")
+
+        if x_array.shape[1] == 0:
+            raise ValueError(f"Features must contain at least one feature")
 
         if x_array.ndim == 1:
             x_array = x_array.reshape(1, -1)
@@ -217,8 +223,8 @@ class Unit(ABC):
         x_array = self.validate_features(np.concatenate(x_arrays, axis=1))
         return x_array
 
-    def fit(self, x_array: Dict[str, npt.NDArray], y_true: npt.NDArray, sample_weight: Optional[npt.NDArray] = None,
-            groups: Optional[npt.NDArray] = None, refit: bool = False):
+    def fit(self, x_array: Dict[str, npt.NDArray], y_true: npt.NDArray, sample_weight: npt.NDArray | None = None,
+            groups: None = None, refit: bool = False):
         """
         Transform data and fit model. Groups parameter is ignored during fitting and exists for compatibility.
 
@@ -228,9 +234,9 @@ class Unit(ABC):
             Dictionary of features encoded as numpy arrays.
         y_true: npt.NDArray
             Numpy array corresponding to target values.
-        sample_weight: Optional[npt.NDArray]
+        sample_weight: npt.NDArray | None
             Target values weights.
-        groups: Optional[npt.NDArray]
+        groups: npt.NDArray | None
             Parameter included for compatibility.
         refit: bool
             An option to refit the model to new data.
@@ -275,7 +281,7 @@ class Unit(ABC):
         predictions: npt.NDArray
         """
         if not self._model_fit:
-            raise RuntimeError('Model has not been fit yet. Please call .fit first.')
+            raise RuntimeError("Model has not been fit yet. Please call .fit first.")
 
         x_array = self.apply_transformers(x_array, fit=False)
         predictions = self.model.predict(x_array).reshape(-1) # no support for multitask predictions
@@ -291,8 +297,8 @@ class Unit(ABC):
                 transformer.reset()
 
     @abstractmethod
-    def score(self, x_array: Dict[str, npt.NDArray], y_true: npt.NDArray, sample_weight: Optional[npt.NDArray] = None,
-              groups: Optional[npt.NDArray] = None, eval_type: Optional[str] = None):
+    def score(self, x_array: Dict[str, npt.NDArray], y_true: npt.NDArray, sample_weight: npt.NDArray | None = None,
+              groups: npt.NDArray | None = None, eval_type: str | None = None):
         """
         Predict and score the quality of predictions.
 
@@ -302,11 +308,11 @@ class Unit(ABC):
             Dictionary of features encoded as numpy arrays.
         y_true: npt.NDArray
             Numpy array corresponding to known target values.
-        sample_weight: Optional[npt.NDArray]
+        sample_weight: npt.NDArray | None
             Target values weights.
-        groups: Optional[npt.NDArray]
+        groups: npt.NDArray | None
             Grouping scheme. If passed, performance metrics are calculated separately for each group.
-        eval_type: str
+        eval_type: str | None
             Name for persistent metrics storage in self.metrics
         """
         pass
@@ -320,7 +326,7 @@ class Unit(ABC):
         path: str
             Path for saving model.
         """
-        joblib.dump(self, path, compress=('xz', 5))
+        joblib.dump(self, path, compress=("xz", 5))
 
     @staticmethod
     def load(path: str):
@@ -346,7 +352,7 @@ class ClassifierUnit(Unit):
     Added in VantaMI version: 0.1.2
     """
 
-    def __init__(self, model, transformer: Optional[TransformerType] = None, use_proba: bool = True):
+    def __init__(self, model, transformer: TransformerType | None = None, use_proba: bool = True):
         """
         Initialize a classification unit with a model and preprocessing transformers.
 
@@ -354,7 +360,7 @@ class ClassifierUnit(Unit):
         ----------
         model: object
             Scikit-learn compatible classification model implementing .fit() and .predict().
-        transformer: Optional[TransformerType]
+        transformer: TransformerType | None
             Mapping from feature-group names to transformers, lists of transformers, or None.
             If None, all feature groups are passed through without preprocessing.
         use_proba: bool, default=True
@@ -364,9 +370,9 @@ class ClassifierUnit(Unit):
         super().__init__(model=model, transformer=transformer)
 
         self.use_proba = use_proba
-        self._has_proba = hasattr(self.model, 'predict_proba')
-        self._has_decision = hasattr(self.model, 'decision_function')
-        self._task = 'Classification'
+        self._has_proba = hasattr(self.model, "predict_proba")
+        self._has_decision = hasattr(self.model, "decision_function")
+        self._task = "Classification"
 
     def predict_proba(self, x_array: Dict[str, npt.NDArray]):
         """
@@ -383,9 +389,9 @@ class ClassifierUnit(Unit):
             One-dimensional array containing a score or probability for the positive class.
         """
         if not self._model_fit:
-            raise RuntimeError('Model has not been fit yet. Please call .fit first.')
+            raise RuntimeError("Model has not been fit yet. Please call .fit first.")
         if not self.use_proba:
-            raise RuntimeError('Probability prediction is disabled. It can be overridden by setting .use_proba = True')
+            raise RuntimeError("Probability prediction is disabled. It can be overridden by setting .use_proba = True")
 
         x_array = self.apply_transformers(x_array, fit=False)
 
@@ -394,13 +400,14 @@ class ClassifierUnit(Unit):
         elif self._has_decision:
             y_score = expit(self.model.decision_function(x_array))
         else:
-            raise RuntimeError(f'{self.name} supports neither decision_function nor predict_proba, '
-                               f'but .use_proba was set to True')
+            raise RuntimeError(
+                f"{self.name} supports neither decision_function nor predict_proba, but .use_proba was set to True"
+            )
 
         return y_score.reshape(-1)
 
     def evaluate(self, y_true: npt.NDArray, y_pred: npt.NDArray, y_score: npt.NDArray,
-                 sample_weight: Optional[npt.NDArray] = None):
+                 sample_weight: npt.NDArray | None = None):
         """
         Calculate classification performance metrics from known labels and predictions.
 
@@ -412,7 +419,7 @@ class ClassifierUnit(Unit):
             One-dimensional array containing predicted binary target labels.
         y_score: npt.NDArray or None
             One-dimensional array containing positive-class probabilities or scores.
-        sample_weight: Optional[npt.NDArray]
+        sample_weight: npt.NDArray | None
             One-dimensional array of non-negative sample weights.
 
         Returns
@@ -444,19 +451,19 @@ class ClassifierUnit(Unit):
         spec = safe_div(TN, TN + FP)
 
         values = {
-            'TP': TP,
-            'FP': FP,
-            'FN': FN,
-            'TN': TN,
-            'Accuracy': rts(safe_div(TP + TN, TP + TN + FP + FN), 5),
-            'Recall': rts(rec, 5),
-            'Specificity': rts(spec, 5),
-            'Precision': rts(safe_div(TP, TP + FP), 5),
-            'Balanced Accuracy': rts((rec + spec) / 2, 5),
-            'GeomRS': rts(np.sqrt(rec * spec), 5),
-            'HarmRS': rts(safe_div(2 * rec * spec, rec + spec), 5),
-            'F1 Score': rts(safe_div(2 * TP, 2 * TP + FP + FN), 5),
-            'MCC': rts(safe_div((TP * TN) - (FP * FN), np.sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))), 5),
+            "TP": TP,
+            "FP": FP,
+            "FN": FN,
+            "TN": TN,
+            "Accuracy": rts(safe_div(TP + TN, TP + TN + FP + FN), 5),
+            "Recall": rts(rec, 5),
+            "Specificity": rts(spec, 5),
+            "Precision": rts(safe_div(TP, TP + FP), 5),
+            "Balanced Accuracy": rts((rec + spec) / 2, 5),
+            "GeomRS": rts(np.sqrt(rec * spec), 5),
+            "HarmRS": rts(safe_div(2 * rec * spec, rec + spec), 5),
+            "F1 Score": rts(safe_div(2 * TP, 2 * TP + FP + FN), 5),
+            "MCC": rts(safe_div((TP * TN) - (FP * FN), np.sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))), 5),
         }
 
         if y_score is not None:
@@ -464,16 +471,16 @@ class ClassifierUnit(Unit):
 
             values.update({
                 "ROC AUC": rts(roc_auc_score(y_true, y_score, sample_weight=sample_weight), 5),
-                'PRC AUC': rts(average_precision_score(y_true=y_true, y_score=y_score, sample_weight=sample_weight), 5),
-                'Brier': rts(brier_score_loss(y_true=y_true, y_proba=y_score, sample_weight=sample_weight), 5),
-                'ECE': rts(ece_score(y_true=y_true, y_score=y_score, sample_weight=sample_weight), 5)
+                "PRC AUC": rts(average_precision_score(y_true=y_true, y_score=y_score, sample_weight=sample_weight), 5),
+                "Brier": rts(brier_score_loss(y_true=y_true, y_proba=y_score, sample_weight=sample_weight), 5),
+                "ECE": rts(ece_score(y_true=y_true, y_score=y_score, sample_weight=sample_weight), 5)
             })
 
-        df = pl.DataFrame(values).unpivot(variable_name='Metric', value_name='Value')
+        df = pl.DataFrame(values).unpivot(variable_name="Metric", value_name="Value")
         return df
 
-    def score(self, x_array: Dict[str, npt.NDArray], y_true: npt.NDArray, sample_weight: Optional[npt.NDArray] = None,
-              groups: Optional[npt.NDArray] = None, eval_type: Optional[str] = None):
+    def score(self, x_array: Dict[str, npt.NDArray], y_true: npt.NDArray, sample_weight: npt.NDArray | None = None,
+              groups: npt.NDArray | None = None, eval_type: str | None = None):
         """
         Predict labels and calculate overall and optional group-specific classification metrics.
 
@@ -483,11 +490,11 @@ class ClassifierUnit(Unit):
             Mapping from feature-group names to one- or two-dimensional feature arrays.
         y_true: npt.NDArray
             One-dimensional array containing true binary target labels.
-        sample_weight: Optional[npt.NDArray]
+        sample_weight: npt.NDArray | None
             One-dimensional array of non-negative sample weights.
-        groups: Optional[npt.NDArray]
+        groups: npt.NDArray | None
             One-dimensional array defining groups for separate metric calculation.
-        eval_type: str
+        eval_type: str | None
             Name for persistent metrics storage in self.metrics
 
         Returns
@@ -496,7 +503,7 @@ class ClassifierUnit(Unit):
             Long-format table containing overall and, when requested, group-specific metrics.
         """
         if not self._model_fit:
-            raise RuntimeError('Model has not been fit yet. Please call .fit first.')
+            raise RuntimeError("Model has not been fit yet. Please call .fit first.")
 
         y_true = self.validate_targets(y_true)
         y_pred = self.predict(x_array)
@@ -506,8 +513,10 @@ class ClassifierUnit(Unit):
         else:
             y_score = None
 
-        metrics = (self.evaluate(y_true=y_true, y_pred=y_pred, y_score=y_score, sample_weight=sample_weight)
-                   .with_columns(pl.lit('Overall').alias('Group')))
+        metrics = (
+            self.evaluate(y_true=y_true, y_pred=y_pred, y_score=y_score, sample_weight=sample_weight)
+            .with_columns(pl.lit("Overall").alias("Group"))
+        )
 
         if groups is not None:
             groups = self.validate_targets(groups)  # groups should be 1D numpy array, same as targets
@@ -521,11 +530,11 @@ class ClassifierUnit(Unit):
                     g_y_score = y_score[mask] if y_score is not None else None
                     g_sample_weight = sample_weight[mask] if sample_weight is not None else None
                     g_metrics = self.evaluate(y_true=g_y_true, y_pred=g_y_pred, y_score=g_y_score, sample_weight=g_sample_weight)
-                    g_metrics = g_metrics.with_columns(pl.lit(group_id).alias('Group'))
+                    g_metrics = g_metrics.with_columns(pl.lit(group_id).alias("Group"))
                     group_metrics.append(g_metrics)
 
             if group_metrics:
-                metrics = pl.concat(group_metrics, how='vertical_relaxed')
+                metrics = pl.concat(group_metrics, how="vertical_relaxed")
 
         if eval_type is not None:
             self.metrics[eval_type] = metrics
@@ -543,7 +552,8 @@ class RegressorUnit(Unit):
     Email: mateusz.iwan@hotmail.com
     Added in VantaMI version: 0.1.2
     """
-    def __init__(self, model, transformer: Optional[TransformerType] = None):
+
+    def __init__(self, model, transformer: TransformerType | None = None):
         """
         Initialize a regression unit with a model and preprocessing transformers.
 
@@ -551,15 +561,15 @@ class RegressorUnit(Unit):
         ----------
         model: object
             Scikit-learn compatible regression model implementing .fit() and .predict().
-        transformer: Optional[TransformerType]
+        transformer: TransformerType | None
             Mapping from feature-group names to transformers, lists of transformers, or None.
             If None, all feature groups are passed through without preprocessing.
         """
 
         super().__init__(model=model, transformer=transformer)
-        self._task = 'Regression'
+        self._task = "Regression"
 
-    def evaluate(self, y_true: npt.NDArray, y_pred: npt.NDArray, sample_weight: Optional[npt.NDArray] = None):
+    def evaluate(self, y_true: npt.NDArray, y_pred: npt.NDArray, sample_weight: npt.NDArray | None = None):
         """
         Calculate regression performance metrics from known and predicted target values.
 
@@ -569,7 +579,7 @@ class RegressorUnit(Unit):
             One-dimensional array containing true target values.
         y_pred: npt.NDArray
             One-dimensional array containing predicted target values.
-        sample_weight: Optional[npt.NDArray]
+        sample_weight: npt.NDArray | None
             One-dimensional array of non-negative sample weights.
 
         Returns
@@ -585,16 +595,16 @@ class RegressorUnit(Unit):
             else np.ones(y_true.shape[0], dtype=float)
 
         values = {
-            'R2': rts(r2_score(y_true=y_true, y_pred=y_pred, sample_weight=sample_weight), 5),
-            'MAE': rts(mean_absolute_error(y_true=y_true, y_pred=y_pred, sample_weight=sample_weight), 5),
-            'RMSE': rts(root_mean_squared_error(y_true=y_true, y_pred=y_pred, sample_weight=sample_weight), 5)
+            "R2": rts(r2_score(y_true=y_true, y_pred=y_pred, sample_weight=sample_weight), 5),
+            "MAE": rts(mean_absolute_error(y_true=y_true, y_pred=y_pred, sample_weight=sample_weight), 5),
+            "RMSE": rts(root_mean_squared_error(y_true=y_true, y_pred=y_pred, sample_weight=sample_weight), 5)
         }
 
-        df = pl.DataFrame(values).unpivot(variable_name='Metric', value_name='Value')
+        df = pl.DataFrame(values).unpivot(variable_name="Metric", value_name="Value")
         return df
 
-    def score(self, x_array: Dict[str, npt.NDArray], y_true: npt.NDArray, sample_weight: Optional[npt.NDArray] = None,
-              groups: Optional[npt.NDArray] = None, eval_type: Optional[str] = None):
+    def score(self, x_array: Dict[str, npt.NDArray], y_true: npt.NDArray, sample_weight: npt.NDArray | None = None,
+              groups: npt.NDArray | None = None, eval_type: str | None = None):
         """
         Predict target values and calculate overall and optional group-specific regression metrics.
 
@@ -604,11 +614,11 @@ class RegressorUnit(Unit):
             Mapping from feature-group names to one- or two-dimensional feature arrays.
         y_true: npt.NDArray
             One-dimensional array containing true target values.
-        sample_weight: Optional[npt.NDArray]
+        sample_weight: npt.NDArray | None
             One-dimensional array of non-negative sample weights.
-        groups: Optional[npt.NDArray]
+        groups: npt.NDArray | None
             One-dimensional array defining groups for separate metric calculation.
-        eval_type: str
+        eval_type: str | None
             Name for persistent metrics storage in self.metrics
 
         Returns
@@ -617,13 +627,13 @@ class RegressorUnit(Unit):
             Long-format table containing overall and, when requested, group-specific metrics.
         """
         if not self._model_fit:
-            raise RuntimeError('Model has not been fit yet. Please call .fit first.')
+            raise RuntimeError("Model has not been fit yet. Please call .fit first.")
 
         y_true = self.validate_targets(y_true)
         y_pred = self.predict(x_array)
 
         metrics = (self.evaluate(y_true=y_true, y_pred=y_pred, sample_weight=sample_weight)
-                   .with_columns(pl.lit('Overall').alias('Group')))
+                   .with_columns(pl.lit("Overall").alias("Group")))
 
         if groups is not None:
             groups = self.validate_targets(groups)  # groups should be 1D numpy array, same as targets
@@ -635,11 +645,11 @@ class RegressorUnit(Unit):
                     g_y_true, g_y_pred = y_true[mask], y_pred[mask]
                     g_sample_weight = sample_weight[mask] if sample_weight is not None else None
                     g_metrics = self.evaluate(y_true=g_y_true, y_pred=g_y_pred, sample_weight=g_sample_weight)
-                    g_metrics = g_metrics.with_columns(pl.lit(group_id).alias('Group'))
+                    g_metrics = g_metrics.with_columns(pl.lit(group_id).alias("Group"))
                     group_metrics.append(g_metrics)
 
             if group_metrics:
-                metrics = pl.concat(group_metrics, how='vertical_relaxed')
+                metrics = pl.concat(group_metrics, how="vertical_relaxed")
 
         if eval_type is not None:
             self.metrics[eval_type] = metrics
@@ -655,7 +665,7 @@ class Ensemble(ABC):
     ----------
     units: List[Unit], optional
         Pre-trained Unit instances to include in the ensemble.
-    voting: str, default='soft'
+    voting: str, default="soft"
         Strategy for combining predictions
     weights: npt.NDArray, optional
         Weights for each unit when using weighted voting. Must be a 1D array or
@@ -667,9 +677,9 @@ class Ensemble(ABC):
         The collection of Unit instances in the ensemble.
     voting: str
         The voting strategy used for combining predictions.
-    raw_weights: Optional[npt.NDArray]
+    raw_weights: npt.NDArray | None
         Not-normalized weights for each unit.
-    weights: Optional[npt.NDArray]
+    weights: npt.NDArray | None
         Normalized weights for each unit (sums to 1.0).
     unit_type: type
         The type of the units in the ensemble (all units must be of the same type).
@@ -684,19 +694,14 @@ class Ensemble(ABC):
     -------
     add_unit(unit)
         Add a Unit to the ensemble.
-
     aggregate_metrics()
         Calculate average metrics across all units in the ensemble.
-
     predict(x_array)
         Make predictions using the ensemble. Must be implemented by subclasses.
-
     score(x_array, y_true, sample_weight=None, groups=None)
         Evaluate the ensemble on test data. Must be implemented by subclasses.
-
     save(path)
         Save the ensemble to a file.
-
     load(path)
         Load an ensemble from a file.
 
@@ -707,17 +712,17 @@ class Ensemble(ABC):
     Added in VantaMI version: 0.1.2
     """
 
-    def __init__(self, units: Optional[List[Unit]] = None, voting: str = 'soft', weights: Optional[npt.NDArray] = None):
+    def __init__(self, units: List[Unit] | None = None, voting: str = "soft", weights: npt.NDArray | None = None):
         """
         Initialize an ensemble of compatible Unit models.
 
         Parameters
         ----------
-        units: Optional[List[Unit]], default=None
+        units: List[Unit] | None, default=None
             Pre-trained Unit instances to include in the ensemble.
-        voting: str, default='soft'
+        voting: str, default="soft"
             Strategy used to combine predictions from individual units.
-        weights: Optional[npt.NDArray],
+        weights: npt.NDArray | None,
             One-dimensional array or column vector of weights corresponding to the units.
         """
         self.units = [] if units is None else list(units)
@@ -733,26 +738,26 @@ class Ensemble(ABC):
 
         if weights is not None:
             if not isinstance(weights, np.ndarray):
-                raise TypeError('Weights must be a numpy array')
+                raise TypeError("Weights must be a numpy array")
 
             if weights.ndim > 2:
-                raise ValueError('Weights must be flattenable to a 1D array')
+                raise ValueError("Weights must be flattenable to a 1D array")
             if weights.ndim == 2:
                 if weights.shape[1] == 1:
                     weights = weights.reshape(-1)
                 else:
-                    raise ValueError('2D array was passed, but the 2nd dimension is greater than 1.')
+                    raise ValueError("2D array was passed, but the 2nd dimension is greater than 1.")
             if weights.shape[0] != len(self.units):
-                raise ValueError('Number of units does not match the number of passed weights.')
+                raise ValueError("Number of units does not match the number of passed weights.")
 
             if not np.all(np.isfinite(weights)):
-                raise ValueError('All weights must be finite.')
+                raise ValueError("All weights must be finite.")
 
             if np.any(weights < 0):
-                raise ValueError('All weights must be non-negative.')
+                raise ValueError("All weights must be non-negative.")
 
             if np.sum(np.abs(weights)) == 0:
-                raise ValueError('Weights cannot all be zeroes.')
+                raise ValueError("Weights cannot all be zeroes.")
 
             self.raw_weights = weights.astype(float, copy=True)
             self.weights = self.raw_weights / self.raw_weights.sum()
@@ -760,11 +765,11 @@ class Ensemble(ABC):
 
         if self._has_units:
             if not all(isinstance(unit, Unit) for unit in self.units):
-                raise TypeError('All units must be of type Unit')
+                raise TypeError("All units must be of type Unit")
 
             unit_types = {type(unit) for unit in self.units}
             if len(unit_types) != 1:
-                raise TypeError('All units must be of the same Unit subclass.')
+                raise TypeError("All units must be of the same Unit subclass.")
 
             self.unit_type = type(self.units[0])
 
@@ -789,7 +794,7 @@ class Ensemble(ABC):
 
         return y_array
 
-    def add_unit(self, unit: Unit, weight: Optional[float] = None):
+    def add_unit(self, unit, weight: float | None = None):
         """
         Add a compatible Unit instance to the ensemble.
 
@@ -797,7 +802,7 @@ class Ensemble(ABC):
         ----------
         unit: Unit
             Unit instance to add. Its concrete type must match existing units.
-        weight: Optional[float], default=None
+        weight: float | None
             Initial unnormalized weight assigned to the added unit. A weight must
             be supplied when the ensemble already uses weighted voting.
 
@@ -807,7 +812,7 @@ class Ensemble(ABC):
             Ensemble instance containing the added unit.
         """
         if not isinstance(unit, Unit):
-            raise TypeError('Unit must be of type Unit')
+            raise TypeError("Unit must be of type Unit")
 
         if weight is not None:
             if not np.isfinite(weight):
@@ -832,7 +837,7 @@ class Ensemble(ABC):
             return self
 
         if type(unit) is not self.unit_type:
-            raise TypeError(f'Units must be of type {self.unit_type.__name__}, received {type(unit).__name__} instead')
+            raise TypeError(f"Units must be of type {self.unit_type.__name__}, received {type(unit).__name__} instead")
 
         if self._has_weights and weight is None:
             raise ValueError("A weight must be provided when adding a unit to a weighted ensemble")
@@ -848,16 +853,11 @@ class Ensemble(ABC):
         """
         Aggregate stored metrics across all units in the ensemble.
 
-        Parameters
-        ----------
-        None
-
         Returns
         -------
-        Optional[pl.DataFrame]
-            Aggregated metric table containing mean, standard deviation, minimum,
-            maximum, and median values across units. Returns None when no stored
-            unit metrics are available.
+        pl.DataFrame | None
+            Aggregated metric table containing mean, standard deviation, minimum, maximum, and median values 
+            across units. Returns None when no stored unit metrics are available.
         """
         metrics = []
 
@@ -867,8 +867,8 @@ class Ensemble(ABC):
         for idx, unit in enumerate(self.units):
             for evaluation_type, metrics_df in unit.metrics.items():
                 df = metrics_df.with_columns([
-                    pl.lit(idx).alias('Unit'),
-                    pl.lit(evaluation_type).alias('Set')
+                    pl.lit(idx).alias("Unit"),
+                    pl.lit(evaluation_type).alias("Set")
                 ])
                 metrics.append(df)
 
@@ -876,16 +876,17 @@ class Ensemble(ABC):
             self.aggregated_metrics = None
             return None
 
-        self.aggregated_metrics = (pl.concat(metrics)
-                        .group_by(['Set', 'Metric', 'Group'])
-                        .agg([
-                            pl.col("Value").mean().alias("Mean"),
-                            pl.col("Value").std().alias("SD"),
-                            pl.col("Value").min().alias("Min"),
-                            pl.col("Value").max().alias("Max"),
-                            pl.col("Value").median().alias("Median")
-                        ])
-                        .sort(['Set', 'Metric', 'Group'])
+        self.aggregated_metrics = (
+            pl.concat(metrics)
+            .group_by(["Set", "Metric", "Group"])
+            .agg([
+                pl.col("Value").mean().alias("Mean"),
+                pl.col("Value").std().alias("SD"),
+                pl.col("Value").min().alias("Min"),
+                pl.col("Value").max().alias("Max"),
+                pl.col("Value").median().alias("Median")
+            ])
+            .sort(["Set", "Metric", "Group"])
         )
 
         return self.aggregated_metrics
@@ -908,8 +909,8 @@ class Ensemble(ABC):
         pass
 
     @abstractmethod
-    def score(self, x_array: Dict[str, npt.NDArray], y_true: npt.NDArray, sample_weight: Optional[npt.NDArray] = None,
-              groups: Optional[npt.NDArray] = None, eval_type: Optional[str] = None):
+    def score(self, x_array: Dict[str, npt.NDArray], y_true: npt.NDArray, sample_weight: npt.NDArray | None = None,
+              groups: npt.NDArray | None = None, eval_type: str | None = None):
         """
         Evaluate ensemble predictions using known target values.
 
@@ -919,9 +920,9 @@ class Ensemble(ABC):
             Mapping from feature-group names to one- or two-dimensional feature arrays.
         y_true: npt.NDArray
             One-dimensional array containing known target values.
-        sample_weight: Optional[npt.NDArray]
+        sample_weight: npt.NDArray | None
             One-dimensional array of non-negative sample weights.
-        groups: Optional[npt.NDArray]
+        groups: npt.NDArray | None
             One-dimensional array defining groups for separate metric calculation.
         eval_type: str
             Name for persistent metrics storage in self.metrics
@@ -942,7 +943,7 @@ class Ensemble(ABC):
         path: str
             Destination path for the saved ensemble.
         """
-        joblib.dump(self, path, compress=('xz', 5))
+        joblib.dump(self, path, compress=("xz", 5))
 
     @staticmethod
     def load(path: str):
@@ -964,43 +965,46 @@ class Ensemble(ABC):
 
 class ClassifierEnsemble(Ensemble):
     """
-    For ClassifierEnsemble, "voting" governs only the .predict_proba method.
-    Regardless of its setting, the .predict method ALWAYS returns the mode of predictions.
+    For ClassifierEnsemble, "voting" governs only the .predict_proba method. Regardless of its setting,
+    the .predict method ALWAYS returns the mode of predictions.
     For the .predict_proba method:
-        - 'soft': returns the mean value
-        - 'weighted': returns the weighted average
+        - "soft": returns the mean value
+        - "weighted": returns the weighted average
     """
-    def __init__(self, units: Optional[List[ClassifierUnit]] = None, voting: str = "soft",
-                 weights: Optional[npt.NDArray] = None):
+
+    def __init__(self, units: List[ClassifierUnit] | None = None, voting: str = "soft",
+                 weights: npt.NDArray | None = None):
         """
         Initialize an ensemble of classification units.
 
         Parameters
         ----------
-        units: Optional[List[ClassifierUnit]]
+        units: List[ClassifierUnit] | None
             Pre-trained classification units to include in the ensemble.
-        voting: str, default='soft'
-            Probability-combination strategy. Supported values are 'soft' and 'weighted'.
-        weights: Optional[npt.NDArray]
+        voting: str, default="soft"
+            Probability-combination strategy. Supported values are "soft" and "weighted".
+        weights: npt.NDArray | None
             One-dimensional array or column vector of weights corresponding to the units.
         """
         if voting not in {"soft", "weighted"}:
-            raise ValueError('Voting must be either "soft" or "weighted".')
+            raise ValueError("Voting must be either `soft` or `weighted`.")
 
         if units is not None and not all(isinstance(unit, ClassifierUnit) for unit in units):
             raise TypeError("ClassifierEnsemble requires ClassifierUnit instances.")
 
         super().__init__(units=units, voting=voting, weights=weights)
-        self._task = 'Classification'
+        self._task = "Classification"
 
-    def add_unit(self, unit: ClassifierUnit, weight: Optional[float] = None):
+    def add_unit(self, unit, weight: float | None = None):
         """
         Add a classification unit to the ensemble.
 
         Parameters
         ----------
-        unit: ClassifierUnit
+        unit
             Classification unit to add. Its concrete type must match existing units.
+        weight: float | None
+            Unit's weight if voting == `weighted`
 
         Returns
         -------
@@ -1048,23 +1052,23 @@ class ClassifierEnsemble(Ensemble):
         if not self._has_units:
             raise RuntimeError("No units are available for prediction.")
 
-        if self.voting == 'weighted' and self.weights is None:
-            raise ValueError('Voting was set to "weighted" but self.weights were not set.')
+        if self.voting == "weighted" and self.weights is None:
+            raise ValueError("Voting was set to 'weighted' but self.weights were not set.")
 
         probs = [unit.predict_proba(x_array).reshape(-1, 1) for unit in self.units]
 
-        if self.voting == 'soft':
+        if self.voting == "soft":
             return np.mean(np.hstack(probs), axis=1)
 
-        elif self.voting == 'weighted':
-            if len(self.weights) != len(self.units):
-                raise ValueError('Number of Units does not match the number of passed weights.')
+        elif self.voting == "weighted":
+            if self.weights.shape[0] != len(self.units):
+                raise ValueError("Number of Units does not match the number of passed weights.")
             return np.average(np.hstack(probs), axis=1, weights=self.weights)
         else:
-            raise ValueError('Voting must be either "soft" or "weighted"')
+            raise ValueError("Voting must be either `soft` or `weighted`")
 
-    def score(self, x_array: Dict[str, npt.NDArray], y_true: npt.NDArray, sample_weight: Optional[npt.NDArray] = None,
-              groups: Optional[npt.NDArray] = None, eval_type: Optional[str] = None):
+    def score(self, x_array: Dict[str, npt.NDArray], y_true: npt.NDArray, sample_weight: npt.NDArray | None = None,
+              groups: npt.NDArray | None = None, eval_type: str | None = None):
         """
         Calculate overall and optional group-specific classification metrics.
 
@@ -1074,9 +1078,9 @@ class ClassifierEnsemble(Ensemble):
             Mapping from feature-group names to one- or two-dimensional feature arrays.
         y_true: npt.NDArray
             One-dimensional array containing known binary target labels.
-        sample_weight: Optional[npt.NDArray]
+        sample_weight: npt.NDArray | None
             One-dimensional array of non-negative sample weights.
-        groups: Optional[npt.NDArray]
+        groups: npt.NDArray | None
             One-dimensional array defining groups for separate metric calculation.
         eval_type: str
             Name for persistent metrics storage in self.metrics
@@ -1099,7 +1103,7 @@ class ClassifierEnsemble(Ensemble):
         cls_unit = self.units[0]
 
         metrics = (cls_unit.evaluate(y_true=y_true, y_pred=y_pred, y_score=y_score, sample_weight=sample_weight)
-                   .with_columns(pl.lit('Overall').alias('Group')))
+                   .with_columns(pl.lit("Overall").alias("Group")))
 
         if groups is not None:
             groups = self.validate_targets(groups)  # groups should be 1D numpy array, same as targets
@@ -1118,12 +1122,12 @@ class ClassifierEnsemble(Ensemble):
                         sample_weight=g_sample_weight
                     )
                     g_metrics = g_metrics.with_columns(
-                        pl.lit(group_id).alias('Group')
+                        pl.lit(group_id).alias("Group")
                     )
                     group_metrics.append(g_metrics)
 
             if group_metrics:
-                metrics = pl.concat(group_metrics, how='vertical_relaxed')
+                metrics = pl.concat(group_metrics, how="vertical_relaxed")
 
         if eval_type is not None:
             self.metrics[eval_type] = metrics
@@ -1134,41 +1138,44 @@ class ClassifierEnsemble(Ensemble):
 class RegressorEnsemble(Ensemble):
     """
     For RegressorEnsemble, "voting" gives the following behavior:
-        - 'hard': returns the median value
-        - 'soft': returns the mean value
-        - 'weighted': returns the weighted average
+        - "hard": returns the median value
+        - "soft": returns the mean value
+        - "weighted": returns the weighted average
     """
-    def __init__(self, units: Optional[List[RegressorUnit]] = None, voting: str = "soft",
-                 weights: Optional[npt.NDArray] = None):
+
+    def __init__(self, units: List[RegressorUnit] | None = None, voting: str = "soft",
+                 weights: npt.NDArray | None = None):
         """
         Initialize an ensemble of regression units.
 
         Parameters
         ----------
-        units: Optional[List[RegressorUnit]]
+        units: List[RegressorUnit] | None
             Pre-trained regression units to include in the ensemble.
-        voting: str, default='soft'
-            Prediction-combination strategy. Supported values are 'hard', 'soft', and 'weighted'.
-        weights: Optional[npt.NDArray]
+        voting: str, default="soft"
+            Prediction-combination strategy. Supported values are "hard", "soft", and "weighted".
+        weights: npt.NDArray | None
             One-dimensional array or column vector of weights corresponding to the units.
         """
         if voting not in {"hard", "soft", "weighted"}:
-            raise ValueError('Voting must be either "hard", "soft", or "weighted".')
+            raise ValueError("Voting must be either `hard`, `soft`, or `weighted`.")
 
         if units is not None and not all(isinstance(unit, RegressorUnit) for unit in units):
             raise TypeError("RegressorEnsemble requires RegressorUnit instances.")
 
         super().__init__(units=units, voting=voting, weights=weights)
-        self._task = 'Regression'
+        self._task = "Regression"
 
-    def add_unit(self, unit: RegressorUnit, weight: Optional[float] = None):
+    def add_unit(self, unit, weight: float | None = None):
         """
         Add a regression unit to the ensemble.
 
         Parameters
         ----------
-        unit: RegressorUnit
+        unit
             Regression unit to add. Its concrete type must match existing units.
+        weight: float | None
+            Unit's weight if voting == `weighted`
 
         Returns
         -------
@@ -1196,27 +1203,26 @@ class RegressorEnsemble(Ensemble):
         if not self._has_units:
             raise RuntimeError("No units are available for prediction.")
 
-        if self.voting == 'weighted' and self.weights is None:
-            raise ValueError('Voting was set to "weighted" but self.weights were not set.')
+        if self.voting == "weighted" and self.weights is None:
+            raise ValueError("Voting was set to `weighted` but self.weights were not set.")
 
         predictions = [unit.predict(x_array).reshape(-1, 1) for unit in self.units]
 
-        if self.voting == 'hard':
+        if self.voting == "hard":
             return np.median(np.hstack(predictions), axis=1)
 
-        elif self.voting == 'soft':
+        elif self.voting == "soft":
             return np.mean(np.hstack(predictions), axis=1)
 
-        elif self.voting == 'weighted':
-            if len(self.weights) != len(self.units):
-                raise ValueError('Number of Units does not match the number of passed weights.')
+        elif self.voting == "weighted":
+            if self.weights.shape[0] != len(self.units):
+                raise ValueError("Number of Units does not match the number of passed weights.")
             return np.average(np.hstack(predictions), axis=1, weights=self.weights)
         else:
-            raise ValueError('Voting must be either "hard", "soft" or "weighted"')
+            raise ValueError("Voting must be either `hard`, `soft` or `weighted`")
 
-
-    def score(self, x_array: Dict[str, npt.NDArray], y_true: npt.NDArray, sample_weight: Optional[npt.NDArray] = None,
-              groups: Optional[npt.NDArray] = None, eval_type: Optional[str] = None):
+    def score(self, x_array: Dict[str, npt.NDArray], y_true: npt.NDArray, sample_weight: npt.NDArray | None = None,
+              groups: npt.NDArray | None = None, eval_type: str | None = None):
         """
         Calculate overall and optional group-specific regression metrics.
 
@@ -1226,9 +1232,9 @@ class RegressorEnsemble(Ensemble):
             Mapping from feature-group names to one- or two-dimensional feature arrays.
         y_true: npt.NDArray
             One-dimensional array containing known target values.
-        sample_weight: Optional[npt.NDArray]
+        sample_weight: npt.NDArray | None
             One-dimensional array of non-negative sample weights.
-        groups: Optional[npt.NDArray]
+        groups: npt.NDArray | None
             One-dimensional array defining groups for separate metric calculation.
         eval_type: str
             Name for persistent metrics storage in self.metrics
@@ -1246,7 +1252,7 @@ class RegressorEnsemble(Ensemble):
         reg_unit = self.units[0]
 
         metrics = (reg_unit.evaluate(y_true=y_true, y_pred=y_pred, sample_weight=sample_weight)
-                   .with_columns(pl.lit('Overall').alias('Group')))
+                   .with_columns(pl.lit("Overall").alias("Group")))
 
         if groups is not None:
             groups = self.validate_targets(groups)  # groups should be 1D numpy array, same as targets
@@ -1259,11 +1265,11 @@ class RegressorEnsemble(Ensemble):
                     g_y_pred = y_pred[mask]
                     g_sample_weight = sample_weight[mask] if sample_weight is not None else None
                     g_metrics = reg_unit.evaluate(y_true=g_y_true, y_pred=g_y_pred, sample_weight=g_sample_weight)
-                    g_metrics = g_metrics.with_columns(pl.lit(group_id).alias('Group'))
+                    g_metrics = g_metrics.with_columns(pl.lit(group_id).alias("Group"))
                     group_metrics.append(g_metrics)
 
             if group_metrics:
-                metrics = pl.concat(group_metrics, how='vertical_relaxed')
+                metrics = pl.concat(group_metrics, how="vertical_relaxed")
 
         if eval_type is not None:
             self.metrics[eval_type] = metrics
