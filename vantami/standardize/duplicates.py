@@ -1,5 +1,7 @@
 from typing import Iterable, List
+
 import numpy as np
+import numpy.typing as npt
 import polars as pl
 
 
@@ -14,14 +16,14 @@ def check_unit_error(values: List[float]) -> bool:
         return False
     for i in range(len(values) - 1):
         v = values[i]
-        ov = set(values[i+1:])
+        ov = set(values[i + 1:])
         vs = {v - 9, v - 6, v - 3, v + 3, v + 6, v + 9}
         if len(vs.intersection(ov)) > 0:
             return True
     return False
 
 
-def mad_duplicates(df: pl.DataFrame, dd_col: str = 'dd_key', smiles_col: str = 'SMILES', value_col: str = 'pIC50',
+def mad_duplicates(df: pl.DataFrame, dd_col: str = "dd_key", smiles_col: str = "SMILES", value_col: str = "pIC50",
                    range_threshold: float = 1.0, z_threshold: float = 3.5):
     """
     Automatically process duplicated entries using Median Absolute Deviation (MAD) outlier detection.
@@ -44,8 +46,7 @@ def mad_duplicates(df: pl.DataFrame, dd_col: str = 'dd_key', smiles_col: str = '
     Returns
     -------
     df: pl.DataFrame
-        The input DataFrame with `value_col` replaced by the deduplicated/
-        aggregated value
+        The input DataFrame with `value_col` replaced by the deduplicated/aggregated value
     """
 
     def within_threshold(values: Iterable[float], r_thresh):
@@ -100,26 +101,26 @@ def mad_duplicates(df: pl.DataFrame, dd_col: str = 'dd_key', smiles_col: str = '
         dfs.append(sub_df)
 
     if dfs:
-        df_duplicated = pl.concat(dfs, how='vertical_relaxed')
-        out_df = pl.concat([df_unique, df_duplicated], how='vertical_relaxed')
+        df_duplicated = pl.concat(dfs, how="vertical_relaxed")
+        out_df = pl.concat([df_unique, df_duplicated], how="vertical_relaxed")
     else:
         out_df = df_unique
 
     df = df.drop(value_col).join(
         out_df.select([dd_col, value_col]).unique(subset=dd_col),
         on=dd_col,
-        how='left',
+        how="left",
     )
 
     return df
 
 
-def mad_censored_duplicates(df: pl.DataFrame, dd_col: str = 'dd_key', smiles_col: str = 'SMILES', value_col: str = 'p_value',
-                            relation_col: str = 'standard_relation', range_threshold: float = 1.0, z_threshold: float = 3.5):
+def mad_censored_duplicates(df: pl.DataFrame, dd_col: str = "dd_key", smiles_col: str = "SMILES",
+                            value_col: str = "p_value", relation_col: str = "standard_relation",
+                            range_threshold: float = 1.0, z_threshold: float = 3.5):
     """
-    Automatically process duplicated/grouped entries that may contain censored
-    (">", "<") as well as exact ("=") measurements, using Median Absolute
-    Deviation (MAD) outlier detection to collapse each group down to a single
+    Automatically process duplicated/grouped entries that may contain censored (`>`, `<`) as well as exact (`=`)
+    measurements, using Median Absolute Deviation (MAD) outlier detection to collapse each group down to a single
     (value, relation) pair.
 
     Parameters
@@ -133,10 +134,10 @@ def mad_censored_duplicates(df: pl.DataFrame, dd_col: str = 'dd_key', smiles_col
     value_col: str
         Column name containing the numerical values to process.
     relation_col: str
-        Column name containing the relation for each value ("=", ">", "<").
+        Column name containing the relation for each value (`=`, `>`, `<`).
     range_threshold: float
-        Maximum difference between values to consider them consistent.
-        Should correspond to the expected experimental error. Default is 1.0
+        Maximum difference between values to consider them consistent. Should correspond to the expected
+         experimental error. Default is 1.0
     z_threshold: float
         Maximum threshold for MAD outlier detection. Default is 3.5
 
@@ -147,16 +148,15 @@ def mad_censored_duplicates(df: pl.DataFrame, dd_col: str = 'dd_key', smiles_col
         their deduplicated/aggregated counterparts
     """
 
-    def process_subset(values: np.ndarray, relations: np.ndarray, r_thr: float, z_thr: float = 3.5):
+    def process_subset(values: npt.NDArray, relations: npt.NDArray[np.str_], r_thr: float, z_thr: float = 3.5):
         """
-        Aggregate bioactivity measurements with exact and/or censored values.
-        Permitted relations are: "=", ">", "<".
+        Aggregate bioactivity measurements with exact and/or censored values. Permitted relations are: `=`, `>`, `<`.
         """
 
-        def within_threshold(_values: np.ndarray, _r_thr: float):
-            return (_values.max() - _values.min()) <= _r_thr
+        def within_threshold(_values: npt.NDArray, _r_thr: float):
+            return (np.max(_values) - np.min(_values)) <= _r_thr
 
-        def mad_filter(_values: np.ndarray, _z_thr: float):
+        def mad_filter(_values: npt.NDArray, _z_thr: float):
             median = np.median(_values)
             mad = np.median(np.abs(_values - median))
             if mad == 0:
@@ -164,7 +164,7 @@ def mad_censored_duplicates(df: pl.DataFrame, dd_col: str = 'dd_key', smiles_col
             modified_z = 0.6745 * (_values - median) / mad
             return np.abs(modified_z) <= _z_thr
 
-        def _sort(_values: np.ndarray, _relations: np.ndarray):
+        def _sort(_values: npt.NDArray, _relations: npt.NDArray[np.str_]):
             _ex, _gt, _lt = [], [], []
             for idx, rel in enumerate(_relations):
                 if rel == "=":
@@ -174,17 +174,17 @@ def mad_censored_duplicates(df: pl.DataFrame, dd_col: str = 'dd_key', smiles_col
                 elif rel == ">":
                     _gt.append(_values[idx])
                 else:
-                    raise ValueError(f"Relation not allowed: {rel}")
+                    raise ValueError(f"Relation not allowed: < {rel} >")
             return (
                 np.array(_ex, dtype=np.float64),
                 np.array(_gt, dtype=np.float64),
                 np.array(_lt, dtype=np.float64),
             )
 
-        def _process(_values: np.ndarray, _r_thr: float, _z_thr: float, rel: str):
+        def _process(_values: npt.NDArray, _r_thr: float, _z_thr: float, rel: str):
             _values = np.asarray(_values, dtype=np.float64)
 
-            def _agg(_values: np.ndarray, _rel: str):
+            def _agg(_values: npt.NDArray, _rel: str):
                 if _rel == "=":
                     return np.median(_values)
                 elif _rel == "<":
@@ -324,15 +324,15 @@ def mad_censored_duplicates(df: pl.DataFrame, dd_col: str = 'dd_key', smiles_col
         dfs.append(process_group(sub_df))
 
     if dfs:
-        df_duplicated = pl.concat(dfs, how='vertical_relaxed')
-        out_df = pl.concat([df_unique, df_duplicated], how='vertical_relaxed')
+        df_duplicated = pl.concat(dfs, how="vertical_relaxed")
+        out_df = pl.concat([df_unique, df_duplicated], how="vertical_relaxed")
     else:
         out_df = df_unique
 
     df = df.drop([value_col, relation_col]).join(
         out_df.select([dd_col, value_col, relation_col]).unique(subset=dd_col),
         on=dd_col,
-        how='left',
+        how="left",
     )
 
     return df

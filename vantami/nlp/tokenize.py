@@ -1,24 +1,27 @@
-from typing import Optional, Pattern
+from typing import Optional, Pattern, TypeAlias, Literal
 
 from nltk.corpus import stopwords
 from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.stem import WordNetLemmatizer, SnowballStemmer
 
 
-def tokenize_document(document: str, lemmatize: bool = True, stem: bool = False, chars: Optional[str] = "alpha",
-                      re_pattern: Optional[Pattern[str]] = None):
+CharsType: TypeAlias = Literal["alpha", "alnum", "ascii"] | None
+
+
+def tokenize_document(document: str, lemmatize: bool = True, stem: bool = False, chars: CharsType = "alpha",
+                      re_pattern: Pattern[str] | None = None):
     """
     Parameters
     ----------
-    document : str
+    document: str
         Input text to tokenize.
-    lemmatize : bool, default=True
+    lemmatize: bool, default=True
         Whether to lemmatize tokens.
-    stem : bool, default=False
+    stem: bool, default=False
         Whether to stem tokens.
-    chars : {'alpha', 'alnum', 'ascii'} or None, default='alpha'
+    chars: CharsType
         Character filter to apply to tokens. If None, no built-in character filtering is applied.
-    re_pattern : re.Pattern, optional
+    re_pattern: re.Pattern, optional
         Compiled regex pattern used to keep matching tokens only (using re.search).
 
     Returns
@@ -44,7 +47,7 @@ def tokenize_document(document: str, lemmatize: bool = True, stem: bool = False,
         elif chars == "ascii":
             tokens = [token for token in tokens if token.isascii()]
         else:
-            raise ValueError("chars must be one of {'alpha', 'alnum', 'ascii'} or None")
+            raise ValueError("chars must be one of {`alpha`, `alnum`, `ascii`} or None")
 
     if re_pattern is not None:
         tokens = [token for token in tokens if re_pattern.search(token)]
