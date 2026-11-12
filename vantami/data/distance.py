@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, List, Sequence, Union, Iterable
+from typing import Tuple, List, Sequence, Union, Iterable, Literal, Dict, Any
 from joblib import Parallel, delayed
 from itertools import chain
 
@@ -18,7 +18,7 @@ Supporting functions
 """
 
 
-Embedding = Union[npt.NDArray, ExplicitBitVect]
+Embedding = npt.NDArray | ExplicitBitVect
 EmbeddingSequence = Sequence[Embedding]
 
 
@@ -71,7 +71,7 @@ def _convert_embeddings(array: Union[npt.NDArray, Iterable[npt.NDArray]], metric
 
     def to_explicit_bitvect(bits: npt.NDArray) -> DataStructs.ExplicitBitVect:
         """
-        Convert numpy's array to rdkit's ExplicitBitVect
+        Convert numpy array to rdkit ExplicitBitVect
         """
 
         bits = np.asarray(bits)
@@ -101,8 +101,8 @@ def _convert_embeddings(array: Union[npt.NDArray, Iterable[npt.NDArray]], metric
     )
 
 
-def _rdkit_triu_b(array: Sequence[ExplicitBitVect], metric: str, threshold: Optional[float],
-                  start_idx: int, end_idx: int, ):
+def _rdkit_triu_b(array: Sequence[ExplicitBitVect], metric: str, threshold: float | None, start_idx: int,
+                  end_idx: int):
     """
     Calculate strict upper-triangular RDKit distances for a row block.
     """
@@ -123,7 +123,7 @@ def _rdkit_triu_b(array: Sequence[ExplicitBitVect], metric: str, threshold: Opti
 
 
 def _rdkit_rect_b(query_array: Sequence[ExplicitBitVect], ref_array: Sequence[ExplicitBitVect], metric: str,
-                  threshold: Optional[float], batch_idx: int):
+                  threshold: float | None, batch_idx: int):
     """
     Calculate one rectangular RDKit distance-matrix block.
     """
@@ -141,8 +141,7 @@ def _rdkit_rect_b(query_array: Sequence[ExplicitBitVect], ref_array: Sequence[Ex
     return batch_idx, np.vstack(rows)
 
 
-def _scipy_triu_b(array: npt.NDArray, metric: str, threshold: Optional[float],
-                  start_idx: int, end_idx: int):
+def _scipy_triu_b(array: npt.NDArray, metric: str, threshold: float | None, start_idx: int, end_idx: int):
     """
     Calculate one upper-triangular SciPy block.
     """
@@ -157,8 +156,7 @@ def _scipy_triu_b(array: npt.NDArray, metric: str, threshold: Optional[float],
     return start_idx, distances
 
 
-def _scipy_rect_b(query_array: npt.NDArray, ref_array: npt.NDArray, metric: str,
-                  threshold: Optional[float], batch_idx: int):
+def _scipy_rect_b(query_array: npt.NDArray, ref_array: npt.NDArray, metric: str, threshold: float | None, batch_idx: int):
     """
     Calculate a single rectangular SciPy distance-matrix block.
     """
@@ -171,7 +169,7 @@ def _scipy_rect_b(query_array: npt.NDArray, ref_array: npt.NDArray, metric: str,
 
 
 def _rdkit_sparse_triu_b(array: Sequence[ExplicitBitVect], metric: str, threshold: float,
-                          start_idx: int, end_idx: int):
+                         start_idx: int, end_idx: int):
     """
     Calculate thresholded strict upper-triangular RDKit distance edges.
     """
@@ -192,9 +190,9 @@ def _rdkit_sparse_triu_b(array: Sequence[ExplicitBitVect], metric: str, threshol
         data.append(distances[local_cols])
 
     if not rows:
-        return (start_idx, np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float64))
+        return start_idx, np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float64)
 
-    return (start_idx, np.concatenate(rows), np.concatenate(cols), np.concatenate(data))
+    return start_idx, np.concatenate(rows), np.concatenate(cols), np.concatenate(data)
 
 
 def _rdkit_sparse_rect_b(query_array: Sequence[ExplicitBitVect], ref_array: Sequence[ExplicitBitVect],
@@ -219,9 +217,9 @@ def _rdkit_sparse_rect_b(query_array: Sequence[ExplicitBitVect], ref_array: Sequ
         data.append(distances[matching_cols])
 
     if not rows:
-        return (batch_idx, np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float64))
+        return batch_idx, np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float64)
 
-    return (batch_idx, np.concatenate(rows), np.concatenate(cols), np.concatenate(data))
+    return batch_idx, np.concatenate(rows), np.concatenate(cols), np.concatenate(data)
 
 
 def _scipy_sparse_triu_b(array: npt.NDArray, metric: str, threshold: float, start_idx: int, end_idx: int):
@@ -284,9 +282,7 @@ def _as_rdkit_array(values: EmbeddingSequence, metric: str):
     any_rdkit = any(isinstance(value, ExplicitBitVect) for value in values)
 
     if any_rdkit and not all_rdkit:
-        raise TypeError(
-            "Cannot mix NumPy arrays and ExplicitBitVect objects in the same sequence."
-        )
+        raise TypeError("Cannot mix NumPy arrays and ExplicitBitVect objects in the same sequence.")
 
     if all_rdkit:
         return values
@@ -300,7 +296,7 @@ def _as_rdkit_array(values: EmbeddingSequence, metric: str):
     return _convert_embeddings(values, metric=metric)
 
 
-def _as_numpy_matrix(values: EmbeddingSequence, name: str):
+def _as_numpy_matrix(values: EmbeddingSequence, name: str) -> npt.NDArray:
     """
     Stack a sequence of equally sized one-dimensional NumPy arrays.
     """
@@ -356,7 +352,7 @@ def _reduce_k_neighbors_block(distances: npt.NDArray, max_nearest_k: int, max_fu
     nearest_distances = _k_smallest_rows(distances, k=max_nearest_k)
     furthest_distances = _k_largest_rows(distances, k=max_furthest_k)
 
-    return (distance_sums, distance_counts, nearest_distances, furthest_distances)
+    return distance_sums, distance_counts, nearest_distances, furthest_distances
 
 
 def _rdkit_k_neighbors_block(query_array: Sequence[ExplicitBitVect], ref_array: Sequence[ExplicitBitVect],
@@ -381,13 +377,14 @@ def _rdkit_k_neighbors_block(query_array: Sequence[ExplicitBitVect], ref_array: 
 
         distances[reference_indices[valid_indices], np.flatnonzero(valid_indices)] = np.nan
 
-    (distance_sums, distance_counts, nearest_distances, furthest_distances,) = (
+    distance_sums, distance_counts, nearest_distances, furthest_distances = (
         _reduce_k_neighbors_block(distances=distances,
                                   max_nearest_k=max_nearest_k,
                                   max_furthest_k=max_furthest_k,
-    ))
+                                  )
+    )
 
-    return (batch_idx, distance_sums, distance_counts, nearest_distances, furthest_distances)
+    return batch_idx, distance_sums, distance_counts, nearest_distances, furthest_distances
 
 
 def _scipy_k_neighbors_block(query_array: npt.NDArray, ref_array: npt.NDArray, metric: str, self_comparison: bool,
@@ -403,14 +400,15 @@ def _scipy_k_neighbors_block(query_array: npt.NDArray, ref_array: npt.NDArray, m
 
         distances[reference_indices[valid_indices], np.flatnonzero(valid_indices)] = np.nan
 
-    (distance_sums, distance_counts, nearest_distances, furthest_distances) = (
+    distance_sums, distance_counts, nearest_distances, furthest_distances = (
         _reduce_k_neighbors_block(
             distances=distances,
             max_nearest_k=max_nearest_k,
-            max_furthest_k=max_furthest_k,
-    ))
+            max_furthest_k=max_furthest_k
+        )
+    )
 
-    return (batch_idx, distance_sums, distance_counts, nearest_distances, furthest_distances)
+    return batch_idx, distance_sums, distance_counts, nearest_distances, furthest_distances
 
 
 """
@@ -418,9 +416,9 @@ Main functions
 """
 
 
-def distance_matrix(array_1: EmbeddingSequence, array_2: Optional[EmbeddingSequence] = None, metric: str = "jaccard",
+def distance_matrix(array_1: EmbeddingSequence, array_2: EmbeddingSequence | None = None, metric: str = "jaccard",
                     n_jobs: int = 1, batch_size: int = 1024, return_triu: bool = False, return_sparse: bool = False,
-                    threshold: Optional[float] = None):
+                    threshold: float | None = None):
     """
     Compute an exact pairwise distance, binary neighborhood matrix, or sparse thresholded distance graph.
 
@@ -430,13 +428,12 @@ def distance_matrix(array_1: EmbeddingSequence, array_2: Optional[EmbeddingSeque
     ----------
     array_1: Sequence[numpy.ndarray | ExplicitBitVect]
         First sequence of arrays
-    array_2: Sequence[numpy.ndarray | ExplicitBitVect] | None, optional
+    array_2: Sequence[numpy.ndarray | ExplicitBitVect] | None
         Second sequence of arrays
         If None, array_1 is compared with itself (which is also faster). Default is None.
     metric: str, optional
         Distance metric to use. RDKit metrics:
-            "jaccard", "braunblanquet", "dice", "kulczynski", "mcconnaughey",
-            "rogotgoldberg","russel","sokal"
+            "jaccard", "braunblanquet", "dice", "kulczynski", "mcconnaughey", "rogotgoldberg","russel","sokal"
     n_jobs: int, optional
         Number of parallel worker processes. Default is 1.
     batch_size: int, optional
@@ -445,16 +442,14 @@ def distance_matrix(array_1: EmbeddingSequence, array_2: Optional[EmbeddingSeque
         If True, return only the strict upper triangle. The diagonal and lower triangle are zero.
         Relevant only when array_2 is None. Default is False.
     return_sparse: bool, optional
-        If True, return a scipy.sparse.csr_array containing only distances less
-        than or equal to threshold. Stored values are actual distances, not
-        binary neighborhood values. Requires threshold to be provided. Default is False.
-    threshold : float | None, optional
+        If True, return a scipy.sparse.csr_array containing only distances less than or equal to threshold.
+    threshold : float | None
         If numeric, return a uint8 binary neighborhood matrix in which a pair is 1 when
         its distance is less than or equal to threshold, otherwise 0. If None, return float64 distances.
 
     Returns
     -------
-    numpy.ndarray or scipy.sparse.csr_array
+    npt.NDArray | scipy.sparse.csr_array
         Distance matrix, binary neighborhood matrix, or sparse thresholded distance graph.
     """
 
@@ -471,7 +466,7 @@ def distance_matrix(array_1: EmbeddingSequence, array_2: Optional[EmbeddingSeque
     if return_sparse and threshold is None:
         raise ValueError("Expected threshold to be provided when return_sparse=True.")
 
-    if (self_comparison := array_2 is None):
+    if self_comparison := array_2 is None:
         array_2 = array_1
 
     output_dtype = np.uint8 if threshold is not None else np.float64
@@ -480,14 +475,9 @@ def distance_matrix(array_1: EmbeddingSequence, array_2: Optional[EmbeddingSeque
     # RDKit path
     if similarity_fn is not None:
         array_1 = _as_rdkit_array(array_1, metric=metric)
+        array_2 = array_1 if self_comparison else _as_rdkit_array(array_2, metric=metric)
 
-        array_2 = (
-            array_1 if self_comparison
-            else _as_rdkit_array(array_2, metric=metric)
-        )
-
-        n_rows = len(array_1)
-        n_cols = len(array_2)
+        n_rows, n_cols = len(array_1), len(array_2)
 
         if n_rows == 0:
             if return_sparse:
@@ -534,8 +524,9 @@ def distance_matrix(array_1: EmbeddingSequence, array_2: Optional[EmbeddingSeque
 
         # Sparse rectangular path
         if return_sparse:
-            batches = [(batch_idx, start_idx, array_1[start_idx:start_idx + batch_size])
-                        for batch_idx, start_idx in enumerate(range(0, n_rows, batch_size))
+            batches = [
+                (batch_idx, start_idx, array_1[start_idx:start_idx + batch_size])
+                for batch_idx, start_idx in enumerate(range(0, n_rows, batch_size))
             ]
 
             chunks = Parallel(n_jobs=n_jobs, backend="loky")(
@@ -667,8 +658,9 @@ def distance_matrix(array_1: EmbeddingSequence, array_2: Optional[EmbeddingSeque
 
     # Sparse rectangular path
     if return_sparse:
-        batches = [(batch_idx, start_idx, array_1[start_idx:start_idx + batch_size])
-                   for batch_idx, start_idx in enumerate(range(0, n_rows, batch_size))
+        batches = [
+            (batch_idx, start_idx, array_1[start_idx:start_idx + batch_size])
+            for batch_idx, start_idx in enumerate(range(0, n_rows, batch_size))
         ]
 
         chunks = Parallel(n_jobs=n_jobs, backend="loky")(
@@ -726,8 +718,9 @@ def distance_matrix(array_1: EmbeddingSequence, array_2: Optional[EmbeddingSeque
         return result
 
     # Rectangular matrix if array_2 is not None
-    batches = [(batch_idx, array_1[start_idx:start_idx + batch_size])
-               for batch_idx, start_idx in enumerate(range(0, n_rows, batch_size))
+    batches = [
+        (batch_idx, array_1[start_idx:start_idx + batch_size])
+        for batch_idx, start_idx in enumerate(range(0, n_rows, batch_size))
     ]
 
     chunks = Parallel(n_jobs=n_jobs, backend="loky")(
@@ -744,10 +737,9 @@ def distance_matrix(array_1: EmbeddingSequence, array_2: Optional[EmbeddingSeque
     return np.vstack([block for _, block in sorted(chunks, key=lambda chunk: chunk[0])])
 
 
-def k_neighbors_distance(query_array: EmbeddingSequence, ref_array: Optional[EmbeddingSequence] = None,
+def k_neighbors_distance(query_array: EmbeddingSequence, ref_array: EmbeddingSequence | None = None,
                          metric: str = "jaccard", n_jobs: int = 1, batch_size: int = 1024,
-                         nearest_k: Optional[Union[int, List[int]]] = None,
-                         furthest_k: Optional[Union[int, List[int]]] = None):
+                         nearest_k: int | List[int] | None = None, furthest_k: int | List[int] | None = None):
     """
     Calculate distance statistics between points in query and reference arrays. For each entry in query array,
     calculates the minimum, mean, and maximum distance to all entries in reference array. If it is not passed,
@@ -763,16 +755,16 @@ def k_neighbors_distance(query_array: EmbeddingSequence, ref_array: Optional[Emb
     ref_array: npt.NDArray, optional
         Reference array, typically the training set. If not passed, self-comparison.
     metric: str, optional
-        Distance metric to use. Default is 'jaccard'.
+        Distance metric to use. Default is "jaccard".
         See scipy.spatial.distance.cdist for a list of supported metrics.
     n_jobs: int, optional
         Number of jobs for parallel processing. Default is 1.
     batch_size: int, optional
         Number of rows to process in a batch. Default is 1024.
-    nearest_k: Optional[List[int]] or int, optional
+    nearest_k: int | List[int] | None
         List of k values for which to calculate average distance to the k nearest neighbors.
         Can be a single integer or a list of integers. Default is None, which is equivalent to [1].
-    furthest_k: Optional[List[int]] or int, optional
+    furthest_k: int | List[int] | None
         List of k values for which to calculate average distance to the k furthest neighbors.
         Can be a single integer or a list of integers. Default is None, which is equivalent to [1].
 
@@ -780,20 +772,20 @@ def k_neighbors_distance(query_array: EmbeddingSequence, ref_array: Optional[Emb
     -------
     pl.DataFrame
         A DataFrame containing distance statistics for each entry in query array:
-        - 'Min': Minimum distance (equivalent to '1 Nearest')
-        - 'Mean': Average distance to all entries in reference array
-        - 'Max': Maximum distance (equivalent to '1 Furthest')
-        - '{k} Nearest': Average distance to k nearest neighbors for each k in nearest_k
-        - '{k} Furthest': Average distance to k furthest neighbors for each k in furthest_k
+        - "Min": Minimum distance (equivalent to "1 Nearest")
+        - "Mean": Average distance to all entries in reference array
+        - "Max": Maximum distance (equivalent to "1 Furthest")
+        - "{k} Nearest": Average distance to k nearest neighbors for each k in nearest_k
+        - "{k} Furthest": Average distance to k furthest neighbors for each k in furthest_k
     """
     if not isinstance(query_array, Sequence):
-        raise TypeError("Expected query_array to be a sequence of NumPy arrays or "
-                        f"ExplicitBitVect objects, got {type(query_array)} instead."
+        raise TypeError(
+            f"Expected query_array to be Sequence[np.ndarray | ExplicitBitVect], got {type(query_array)} instead."
         )
 
     if ref_array is not None and not isinstance(ref_array, Sequence):
-        raise TypeError("Expected ref_array to be a sequence of NumPy arrays, ExplicitBitVect objects, or None "
-                        f"got {type(ref_array)} instead."
+        raise TypeError(
+            f"Expected ref_array to be Sequence[np.ndarray | ExplicitBitVect], got {type(ref_array)} instead."
         )
 
     if batch_size < 1:
@@ -814,12 +806,12 @@ def k_neighbors_distance(query_array: EmbeddingSequence, ref_array: Optional[Emb
     nearest_k = ([1] if nearest_k is None else sorted(set(nearest_k + [1])))
     furthest_k = ([1] if furthest_k is None else sorted(set(furthest_k + [1])))
 
-    if (self_comparison := ref_array is None):
+    if self_comparison := ref_array is None:
         ref_array = query_array if self_comparison else ref_array
 
     if (available_neighbours := len(ref_array) - int(self_comparison)) < 1:
-        raise ValueError("Self-comparison requires at least two entries."
-                         "A reference comparison requires at least one reference entry."
+        raise ValueError(
+            "Self-comparison requires at least two entries. A reference comparison requires at least one reference entry."
         )
 
     max_nearest_k = max(nearest_k)
@@ -840,7 +832,6 @@ def k_neighbors_distance(query_array: EmbeddingSequence, ref_array: Optional[Emb
     # RDKit route
     if metric in rdkit_similarity_functions:
         query_array = _as_rdkit_array(query_array, metric=metric)
-
         ref_array = query_array if self_comparison else _as_rdkit_array(ref_array, metric=metric)
 
         blocks = Parallel(n_jobs=n_jobs, backend="loky")(
@@ -896,18 +887,16 @@ def k_neighbors_distance(query_array: EmbeddingSequence, ref_array: Optional[Emb
     result = pl.DataFrame({"Mean": mean_distances})
 
     result = result.with_columns([
-            pl.Series(f"{k} Nearest", nearest_distances[:, :k].mean(axis=1))
-            for k in nearest_k
+        pl.Series(f"{k} Nearest", nearest_distances[:, :k].mean(axis=1)) for k in nearest_k
     ])
 
     result = result.with_columns([
-            pl.Series(f"{k} Furthest", furthest_distances[:, -k:].mean(axis=1))
-            for k in furthest_k
+        pl.Series(f"{k} Furthest", furthest_distances[:, -k:].mean(axis=1)) for k in furthest_k
     ])
 
     return result.rename({
-            "1 Nearest": "Min",
-            "1 Furthest": "Max"
+        "1 Nearest": "Min",
+        "1 Furthest": "Max"
     })
 
 
@@ -926,7 +915,7 @@ def group_distance(df: pl.DataFrame, features_col: str, group_col: str, metric: 
     group_col: str
         The name of the column with group assignments for comparison.
     metric : str, optional
-        Distance metric to use. Default is 'jaccard'. See scipy.spatial.distance.cdist
+        Distance metric to use. Default is "jaccard". See scipy.spatial.distance.cdist
         for a list of supported metrics.
     n_jobs : int, optional
         Number of jobs for parallel processing. Default is 1.
@@ -947,7 +936,7 @@ def group_distance(df: pl.DataFrame, features_col: str, group_col: str, metric: 
     """
     required_columns = [features_col, group_col]
 
-    if (missing_columns := [column for column in required_columns if column not in df.columns]):
+    if missing_columns := [column for column in required_columns if column not in df.columns]:
         raise KeyError(f"Missing required columns: {missing_columns}.")
 
     if subsample is not None:
@@ -963,17 +952,18 @@ def group_distance(df: pl.DataFrame, features_col: str, group_col: str, metric: 
     # Assume each entry belongs to a single group
     if group_type in single_assignment_dtypes:
         unique_groups = df[group_col].drop_nulls().unique().to_list()
-        group_type = 'Single'
+        group_type = "Single"
 
     # Assume each entry *might* belong to multiple groups
     elif group_type in multiple_assignment_dtypes:
         unique_groups = sorted(chain.from_iterable(df[group_col].drop_nulls().unique().to_list()))
-        group_type = 'Multiple'
+        group_type = "Multiple"
 
     else:
-        raise TypeError(f"Expected the dtype of group_col to be either Int32, Int64, or String for single group"
-                        f"assignment, and pl.List or pl>array for multi-group assignments. "
-                        f"Got {df[group_col].dtype} instead.")
+        raise TypeError(
+            f"Expected the dtype of group_col to be either Int32, Int64, or String for single group assignment, "
+            f"and pl.List or pl.Array for multi-group assignments. Got {df[group_col].dtype} instead."
+        )
 
     if not unique_groups:
         return None
@@ -1048,8 +1038,8 @@ def group_distance(df: pl.DataFrame, features_col: str, group_col: str, metric: 
 
 
 def group_k_neighbors_distance(df: pl.DataFrame, features_col: str, group_col: str, metric: str = "jaccard",
-                               n_jobs: int = 1, batch_size: int = 1024, nearest_k: Optional[List[int]] = None,
-                               furthest_k: Optional[List[int]] = None):
+                               n_jobs: int = 1, batch_size: int = 1024, nearest_k: int | List[int] | None = None,
+                               furthest_k: int | List[int] | None = None):
     """
     Calculate intra- and intergroup distance distribution. The group_col should contain either
     integers or lists of integers.
@@ -1063,16 +1053,16 @@ def group_k_neighbors_distance(df: pl.DataFrame, features_col: str, group_col: s
     group_col: str
         The name of the column with group assignments for comparison.
     metric : str, optional
-        Distance metric to use. Default is 'jaccard'.
+        Distance metric to use. Default is "jaccard".
         See scipy.spatial.distance.cdist for a list of supported metrics.
     n_jobs : int, optional
         Number of jobs for parallel processing. Default is 1.
     batch_size : int, optional
         Number of rows to process in a single batch. Default is 1024.
-    nearest_k : Optional[List[int]] or int, optional
+    nearest_k : int | List[int] | None
         List of k values for which to calculate average distance to the k nearest neighbors.
         Can be a single integer or a list of integers. Default is None, which is equivalent to [1].
-    furthest_k : Optional[List[int]] or int, optional
+    furthest_k : int | List[int] | None
         List of k values for which to calculate average distance to the k furthest neighbors.
         Can be a single integer or a list of integers. Default is None, which is equivalent to [1].
 
@@ -1083,7 +1073,7 @@ def group_k_neighbors_distance(df: pl.DataFrame, features_col: str, group_col: s
 
     required_columns = [features_col, group_col]
 
-    if (missing_columns := [column for column in required_columns if column not in df.columns]):
+    if missing_columns := [column for column in required_columns if column not in df.columns]:
         raise KeyError(f"Missing required columns: {missing_columns}.")
 
     group_type = df[group_col].dtype
@@ -1093,17 +1083,18 @@ def group_k_neighbors_distance(df: pl.DataFrame, features_col: str, group_col: s
     # Assume each entry belongs to a single group
     if group_type in single_assignment_dtypes:
         unique_groups = df[group_col].drop_nulls().unique().to_list()
-        group_type = 'Single'
+        group_type = "Single"
 
     # Assume each entry *might* belong to multiple groups
     elif group_type in multiple_assignment_dtypes:
         unique_groups = sorted(chain.from_iterable(df[group_col].drop_nulls().unique().to_list()))
-        group_type = 'Multiple'
+        group_type = "Multiple"
 
     else:
-        raise TypeError(f"Expected the dtype of group_col to be either Int32, Int64, or String for single group"
-                        f"assignment, and pl.List or pl>array for multi-group assignments. "
-                        f"Got {df[group_col].dtype} instead.")
+        raise TypeError(
+            f"Expected the dtype of group_col to be either Int32, Int64, or String for single group assignment, "
+            f"and pl.List or pl.Array for multi-group assignments. Got {df[group_col].dtype} instead."
+        )
 
     if not unique_groups:
         return None
@@ -1152,17 +1143,17 @@ def group_k_neighbors_distance(df: pl.DataFrame, features_col: str, group_col: s
         )
 
         intra_df = pl.DataFrame({
-                "Scope": ["Intra"] * len(intra_knd.columns),
-                "Group": [group] * len(intra_knd.columns),
-                "Aggregation": intra_knd.columns,
-                "Values": [intra_knd.get_column(column).to_list() for column in intra_knd.columns]
+            "Scope": ["Intra"] * len(intra_knd.columns),
+            "Group": [group] * len(intra_knd.columns),
+            "Aggregation": intra_knd.columns,
+            "Values": [intra_knd.get_column(column).to_list() for column in intra_knd.columns]
         })
 
         inter_df = pl.DataFrame({
-                "Scope": ["Inter"] * len(inter_knd.columns),
-                "Group": [group] * len(inter_knd.columns),
-                "Aggregation": inter_knd.columns,
-                "Values": [inter_knd.get_column(column).to_list() for column in inter_knd.columns]
+            "Scope": ["Inter"] * len(inter_knd.columns),
+            "Group": [group] * len(inter_knd.columns),
+            "Aggregation": inter_knd.columns,
+            "Values": [inter_knd.get_column(column).to_list() for column in inter_knd.columns]
         })
 
         results.append(pl.concat([intra_df, inter_df], how="vertical_relaxed"))
@@ -1170,18 +1161,58 @@ def group_k_neighbors_distance(df: pl.DataFrame, features_col: str, group_col: s
     return pl.concat(results, how="vertical_relaxed")
 
 
-def list_similarity(string: str, target_strings: list, method: str = 'fuzzy', threshold: float = 0.75,
-                    num_matches: int = 3):
+def string_distance(string_1: str, string_2: str, method: Literal["fuzzy", "levenshtein"] = "fuzzy"):
     """
-    Find the 3 most similar strings in passed target_strings using either fuzzy matching or Levenshtein distance.
+    Calculate distance between two strings.
+
     Parameters
     ----------
-    string : str
+    string_1: str
+        First string to compare
+    string_2: str
+        Second string to compare
+    method: str
+        Distance calculation method.
+
+    Returns
+    -------
+    distance: float
+        Calculated string distance
+    """
+    try:
+        import Levenshtein
+        from rapidfuzz import fuzz
+    except ImportError as exc:
+        raise ImportError("Function < string_distance > requires < Levenshtein > and < rapidfuzz > libraries.") from exc
+
+    if not isinstance(string_1, str) and not isinstance(string_2, str):
+        raise TypeError(
+            f"Expected both passed values to be strings, got {type(string_1)} and {type(string_2)} instead"
+        )
+
+    if method == "levenshtein":
+        distance = np.round(Levenshtein.distance(string_1, string_2) / max(len(string_1), len(string_2)), 3)
+    elif method == "fuzzy":
+        distance = 1 - np.round(fuzz.ratio(string_1, string_2) / 100.0, 3)
+    else:
+        raise ValueError(f"Available options for method are: levenshtein, fuzzy")
+
+    return distance
+
+
+def list_similarity(string: str, target_strings: List[str], method: Literal["fuzzy", "levenshtein"] = "fuzzy",
+                    threshold: float = 0.75, num_matches: int = 3):
+    """
+    Find the 3 most similar strings in passed target_strings using either fuzzy matching or Levenshtein distance.
+
+    Parameters
+    ----------
+    string: str
         The input string to compare against the internal database.
-    target_strings : list
+    target_strings: List
         The list of strings to search for similarities
-    method : str, optional
-        The similarity method to use, either 'fuzzy' or 'levenshtein'. Default is 'fuzzy'.
+    method: Literal["fuzzy", "levenshtein"]
+        The similarity method to use, either "fuzzy" or "levenshtein". Default is "fuzzy".
     threshold : float, optional
         The minimum similarity threshold for considering a match. Default is 0.75
     num_matches: int, optional
@@ -1189,7 +1220,7 @@ def list_similarity(string: str, target_strings: list, method: str = 'fuzzy', th
 
     Returns
     -------
-    list[tuple]
+    List[tuple]
         A list of up to 3 tuples, each containing a matching string and its similarity score,
         sorted by similarity in descending order.
     """
@@ -1203,9 +1234,9 @@ def list_similarity(string: str, target_strings: list, method: str = 'fuzzy', th
     similarities = []
 
     for item in target_strings:
-        if method == 'levenshtein':
+        if method == "levenshtein":
             sim = np.round(1 - Levenshtein.distance(string, item) / max(len(string), len(item)), 3)
-        elif method == 'fuzzy':
+        elif method == "fuzzy":
             sim = np.round(fuzz.ratio(string, item) / 100.0, 3)
         else:
             raise ValueError(f"Available options for method are: levenshtein, fuzzy")
@@ -1217,28 +1248,27 @@ def list_similarity(string: str, target_strings: list, method: str = 'fuzzy', th
     return similarities[:num_matches]
 
 
-def dict_similarity(string: str, target_mapping: dict, method: str = 'fuzzy', threshold: float = 0.75,
-                    num_matches: int = 3):
+def dict_similarity(string: str, target_mapping: Dict[str, Any], method: Literal["fuzzy", "levenshtein"] = "fuzzy",
+                    threshold: float = 0.75, num_matches: int = 3):
     """
-    Find the most similar strings in keys of passed mapping using either
-    fuzzy matching or Levenshtein distance.
+    Find the most similar strings in keys of passed mapping using either fuzzy matching or Levenshtein distance.
 
     Parameters
     ----------
-    string : str
+    string: str
         The input string to compare against the internal database.
-    target_mapping : dict
-        The mapping from trade_name to ingredients (dict)
-    method : str, optional
-        The similarity method to use, either 'fuzzy' or 'levenshtein'. Default is 'fuzzy'.
-    threshold : float, optional
+    target_mapping: Dict[str, Any]
+        A dictionary to check against
+    method: str, optional
+        The similarity method to use, either "fuzzy" or "levenshtein". Default is "fuzzy".
+    threshold: float, optional
         The minimum similarity threshold for considering a match. Default is 0.75
     num_matches: int, optional
         Number of top matches to return
 
     Returns
     -------
-    list[tuple]
+    List[Tuple, ...]
         A list of up to num_matches tuples, each containing a matching string and its similarity score,
         sorted by similarity in descending order.
     """
@@ -1251,10 +1281,10 @@ def dict_similarity(string: str, target_mapping: dict, method: str = 'fuzzy', th
 
     similarities = []
 
-    for key, value in target_mapping.items():  # trade_name : mixture
-        if method == 'levenshtein':
+    for key, value in target_mapping.items():
+        if method == "levenshtein":
             sim = np.round(1 - Levenshtein.distance(string, key) / max(len(string), len(key)), 3)
-        elif method == 'fuzzy':
+        elif method == "fuzzy":
             sim = np.round(fuzz.ratio(string, key) / 100.0, 3)
         else:
             raise ValueError(f"Available options for method are: levenshtein, fuzzy")
@@ -1266,40 +1296,3 @@ def dict_similarity(string: str, target_mapping: dict, method: str = 'fuzzy', th
 
     return similarities[:num_matches]
 
-
-def string_distance(string_1, string_2, method: str = 'levenshtein'):
-    """
-    Calculate distance between two strings.
-
-    Parameters
-    ----------
-    string_1: str
-        First string to compare
-    string_2: str
-        Second string to compare
-    method: str
-        Distance calculation method. Default is 'levenshtein'. Alternative is fuzzy
-
-    Returns
-    -------
-    distance: float
-        Calculated string distance
-    """
-    try:
-        import Levenshtein
-        from rapidfuzz import fuzz
-    except ImportError:
-        raise ImportError("Function < string_distance > requires < Levenshtein > and < rapidfuzz > libraries."
-                          "Please install them using < pip install Levenshtein rapidfuzz >")
-
-    if not all([isinstance(string_1, str), isinstance(string_2, str)]):
-        raise TypeError(f"Expected both passed values to be strings, got {type(string_1)} and {type(string_2)} instead")
-
-    if method == "levenshtein":
-        distance = np.round(Levenshtein.distance(string_1, string_2) / max(len(string_1), len(string_2)), 3)
-    elif method == "fuzzy":
-        distance = 1 - np.round(fuzz.ratio(string_1, string_2) / 100.0, 3)
-    else:
-        raise ValueError(f"Available options for method are: levenshtein, fuzzy")
-
-    return distance

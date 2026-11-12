@@ -1,22 +1,26 @@
 """
-Multimodal PyTorch datasets backed by Polars or lazily read Zarr stores.
+Multimodal PyTorch datasets backed by Polars or lazily read LMDB stores.
 """
 
 from __future__ import annotations
 
 import os
+from io import BytesIO
 from abc import ABC, abstractmethod
 from collections import defaultdict
-import json
-import pickle
+from collections.abc import Mapping, Sequence
+import json, pickle
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Union
 
+import lmdb
 import numpy as np
 import polars as pl
+
 import torch
 from torch.utils.data import Dataset
+from torch_geometric.data import Batch, Data
 
 
 class MMDataset(Dataset, ABC):
@@ -151,95 +155,6 @@ class PolarsMMDataset(MMDataset):
                 return value
             return torch.as_tensor(value)
         return value
-
-
-class ZarrMMDataset(MMDataset):
-    """
-    Lazy, sample-indexed dataset stored by < polars_2_zarr >.
-    """
-    SCHEMA_VERSION = 1
-
-    def __init__(self, path: Union[str, Path], config: Dict[str, str]) -> None:
-        self.path = str(path)
-        self._group = None
-        self._owner_pid: Optional[int] = None
-        root = self._open_group()
-        try:
-            manifest = json.loads(root.attrs["mm_dataset_manifest"])
-        except (KeyError, TypeError, json.JSONDecodeError) as exc:
-            raise ValueError("Not an MMDataset Zarr store: missing valid manifest") from exc
-        if (version := manifest.get("schema_version")) != self.SCHEMA_VERSION:
-            raise ValueError(f"Unsupported schema version < {version} >; expected {self.SCHEMA_VERSION}")
-        self._manifest = manifest
-        self._length = int(manifest["length"])
-        super().__init__(config)
-        if self.config != manifest["batch_config"]:
-            raise ValueError("Zarr manifest batch configuration is inconsistent")
-
-    def __getstate__(self):
-        state = self.__dict__.copy()
-        state["_group"] = None
-        state["_owner_pid"] = None
-        return state
-
-    def _open_group(self):
-        if self._group is None or self._owner_pid != os.getpid():
-            try:
-                import zarr
-            except ImportError as exc:
-                raise ImportError("< ZarrMMDataset > requires the < zarr > library") from exc
-            self._group = zarr.open_group(self.path, mode="r")
-            self._owner_pid = os.getpid()
-        return self._group
-
-    def __len__(self) -> int:
-        return self._length
-
-    @staticmethod
-    def _tensor(value: Any) -> torch.Tensor:
-        return torch.from_numpy(np.array(value, copy=True))
-
-    def _get_value(self, batch_key: str, idx: int):
-        root = self._open_group()
-        modality = self.config[batch_key]
-        storage_key = self._manifest["storage_keys"][batch_key]
-
-        if modality == "string":
-            node = root[f"strings/{storage_key}"]
-            tokens = self._tensor(node["values"][idx])
-            true_length = int(node["lengths"][idx])
-            return tokens, true_length
-
-        if modality == "graph":
-            return self._read_graph(root[f"graphs/{storage_key}"], idx)
-
-        node = root[f"dense/{storage_key}"]
-        if node.attrs.get("encoding") == "categorical":
-            category = node["categories"][int(node["codes"][idx])]
-            return str(category)
-        return self._tensor(node["values"][idx])
-
-    def _read_graph(self, node: Any, idx: int) -> Any:
-        try:
-            from torch_geometric.data import Data
-        except ImportError as exc:
-            raise ImportError("Reading graph modalities requires torch-geometric") from exc
-
-        n0, n1 = (int(x) for x in node["node_offsets"][idx:idx + 2])
-        e0, e1 = (int(x) for x in node["edge_offsets"][idx:idx + 2])
-        kwargs: Dict[str, Any] = {
-            "x": self._tensor(node["x"][n0:n1]),
-            "edge_index": self._tensor(node["edge_index"][:, e0:e1]),
-        }
-        metadata = json.loads(node.attrs["field_metadata"])
-        for field, scope in metadata.items():
-            if scope == "node":
-                kwargs[field] = self._tensor(node[f"node/{field}"][n0:n1])
-            elif scope == "edge":
-                kwargs[field] = self._tensor(node[f"edge/{field}"][e0:e1])
-            else:
-                kwargs[field] = self._tensor(node[f"graph/{field}"][idx])
-        return Data(**kwargs)
 
 
 class LMDBMMDataset(MMDataset):
@@ -550,3 +465,197 @@ class MMBatch:
 
     def __repr__(self) -> str:
         return f"MMBatch({list(self.data.keys())})"
+
+
+# ============= #
+# Graph-version #
+# ============= #
+
+
+_META_KEY = b"__meta__"
+_RECORD_PREFIX = b"record:"
+
+
+def _deserialize(value: bytes) -> Any:
+    return torch.load(BytesIO(value), map_location="cpu", weights_only=False)
+
+
+def _record_key(record_id: int) -> bytes:
+    return _RECORD_PREFIX + f"{record_id:020d}".encode("ascii")
+
+
+class GraphBatch(dict):
+    """
+    Dictionary-compatible complete batch for graph models derived from ``MMUnit``.
+    """
+
+    def __init__(self, **data: Any) -> None:
+        super().__init__(data)
+
+    def to(self, device: str | torch.device, non_blocking: bool = False) -> "GraphBatch":
+        """
+        Move tensor-like entries to a device while preserving Python metadata.
+        """
+        moved: dict[str, Any] = {}
+        for key, value in self.items():
+            if isinstance(value, torch.Tensor):
+                moved[key] = value.to(device, non_blocking=non_blocking)
+            elif hasattr(value, "to"):
+                moved[key] = value.to(device, non_blocking=non_blocking)
+            else:
+                moved[key] = value
+        return type(self)(**moved)
+
+    @classmethod
+    def collate_fn(cls, samples: Sequence[Mapping[str, Any]]) -> "GraphBatch":
+        """
+        Collate graph samples into a model-ready batch.
+
+        Required fields are ``graph``, ``y_true``, and ``y_wgts``.
+
+        All other fields are collated automatically: tensors are stacked where possible;
+        non-tensor metadata remains row-aligned in a list.
+        """
+        if not samples:
+            raise ValueError("Cannot collate an empty sequence of samples.")
+
+        required = {"graph", "y_true", "y_wgts"}
+        missing = required - set(samples[0])
+        if missing:
+            raise KeyError(f"First sample is missing required field(s): {sorted(missing)}.")
+        for index, sample in enumerate(samples[1:], start=1):
+            absent = required - set(sample)
+            if absent:
+                raise KeyError(f"Sample {index} is missing required field(s): {sorted(absent)}.")
+
+        result: dict[str, Any] = {
+            "graph": Batch.from_data_list([sample["graph"] for sample in samples]),
+            "y_true": torch.stack([sample["y_true"] for sample in samples], dim=0),
+            "y_wgts": torch.stack([sample["y_wgts"] for sample in samples], dim=0),
+        }
+
+        optional_keys = set().union(*(sample.keys() for sample in samples)) - required
+        for key in optional_keys:
+            values = [sample.get(key) for sample in samples]
+            if all(isinstance(value, torch.Tensor) for value in values):
+                try:
+                    result[key] = torch.stack(values, dim=0)
+                    continue
+                except RuntimeError:
+                    pass
+            result[key] = values
+
+        return cls(**result)
+
+
+class LMDBGraphDataset(Dataset[dict[str, Any]]):
+    """
+    Read-only map-style dataset for records written by `build_graph_lmdb`.
+    """
+
+    def __init__(self, lmdb_path: str | Path, *, validate_schema: bool = True) -> None:
+        self.lmdb_path = str(Path(lmdb_path))
+        self._env: lmdb.Environment | None = None
+        self._metadata = self._read_metadata()
+        self._record_ids = self._read_record_ids()
+
+        if validate_schema:
+            self._validate_metadata()
+
+        self.close()
+
+    def _open_env(self) -> lmdb.Environment:
+        if self._env is None:
+            self._env = lmdb.open(
+                self.lmdb_path,
+                readonly=True,
+                lock=False,
+                readahead=False,
+                meminit=False,
+                max_readers=2_048,
+                subdir=True,
+            )
+        return self._env
+
+    def _read_metadata(self) -> dict[str, Any]:
+        env = self._open_env()
+        with env.begin(write=False) as txn:
+            raw = txn.get(_META_KEY)
+        if raw is None:
+            raise ValueError(f"No metadata record found in LMDB: {self.lmdb_path}")
+        metadata = _deserialize(raw)
+        if not isinstance(metadata, dict):
+            raise TypeError("LMDB metadata must be a dictionary.")
+        return metadata
+
+    def _read_record_ids(self) -> list[int]:
+        env = self._open_env()
+        record_ids: list[int] = []
+        with env.begin(write=False) as txn:
+            with txn.cursor() as cursor:
+                if cursor.set_range(_RECORD_PREFIX):
+                    for key, _ in cursor:
+                        if not key.startswith(_RECORD_PREFIX):
+                            break
+                        record_ids.append(int(key[len(_RECORD_PREFIX):]))
+        return record_ids
+
+    def _validate_metadata(self) -> None:
+        if self._metadata.get("schema_version") != 1:
+            raise ValueError(
+                f"Unsupported LMDB schema version: {self._metadata.get('schema_version')!r}."
+            )
+        expected = self._metadata.get("num_records")
+        if expected != len(self._record_ids):
+            raise ValueError(f"LMDB metadata reports {expected} records but found {len(self._record_ids)}.")
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        """Return a shallow copy of immutable dataset provenance metadata."""
+        return dict(self._metadata)
+
+    @property
+    def record_ids(self) -> tuple[int, ...]:
+        """Return record identifiers in deterministic LMDB-key order."""
+        return tuple(self._record_ids)
+
+    def __len__(self) -> int:
+        return len(self._record_ids)
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        if index < 0:
+            index += len(self)
+        if index < 0 or index >= len(self):
+            raise IndexError(f"Dataset index {index} is out of range.")
+
+        record_id = self._record_ids[index]
+        with self._open_env().begin(write=False) as txn:
+            raw = txn.get(_record_key(record_id))
+        if raw is None:
+            raise KeyError(f"LMDB record disappeared for record_id={record_id}.")
+
+        sample = _deserialize(raw)
+        if not isinstance(sample, dict) or not isinstance(sample.get("graph"), Data):
+            raise TypeError(f"Malformed sample for record_id={record_id}.")
+
+        sample["y_true"] = torch.as_tensor(sample["y_true"])
+        sample["y_wgts"] = torch.as_tensor(sample["y_wgts"], dtype=torch.float32)
+        return sample
+
+    def close(self) -> None:
+        """Close the current process's LMDB environment."""
+        if self._env is not None:
+            self._env.close()
+            self._env = None
+
+    def __getstate__(self) -> dict[str, Any]:
+        """Do not pickle an open LMDB environment into DataLoader workers."""
+        state = self.__dict__.copy()
+        state["_env"] = None
+        return state
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass

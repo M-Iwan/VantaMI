@@ -14,44 +14,47 @@ from vantami.dl.utils import get_activation_fn
 class GNNModule(nn.Module):
     """
     Apply one graph-convolution block to a PyTorch Geometric graph batch.
-
-    Parameters
-    ----------
-    graph_layer: nn.Module
-        PyTorch Geometric graph-convolution layer to apply.
-    batch_norm: Optional[nn.Module]
-        Node-feature normalization layer.
-    activation: Optional[nn.Module]
-        Activation layer applied after normalization.
-    dropout: Optional[nn.Module]
-        Dropout layer applied after the activation.
     """
 
-    def __init__(self, graph_layer: nn.Module, batch_norm: Optional[nn.Module] = None,
-                 activation: Optional[nn.Module] = None, dropout: Optional[nn.Module] = None):
+    def __init__(
+            self,
+            graph_layer: nn.Module,
+            batch_norm: Optional[nn.Module] = None,
+            activation: Optional[nn.Module] = None,
+            dropout: Optional[nn.Module] = None,
+            edge_index_key: str = "edge_index",
+            edge_attr_key: str = "edge_attr"
+    ):
+        """
+        Build a self-contained graph-convolution block.
+
+        Parameters
+        ----------
+        graph_layer: nn.Module
+            PyTorch Geometric graph-convolution layer to apply.
+        batch_norm: Optional[nn.Module]
+            Node-feature normalization layer.
+        activation: Optional[nn.Module]
+            Activation layer applied after normalization.
+        dropout: Optional[nn.Module]
+            Dropout layer applied after the activation.
+        edge_index_key: str, optional
+            Key in PyG Data for edge_index
+
+        """
         super().__init__()
         self.graph_layer = graph_layer
         self.batch_norm = batch_norm
         self.activation = activation
         self.dropout = dropout
         self.accepts_edge_attr = "edge_attr" in inspect.signature(self.graph_layer.forward).parameters
+        self.edge_index_key = edge_index_key
+        self.edge_attr_key = edge_attr_key
 
     def forward(self, graph_batch):
-        """
-        Transform node features in a graph batch.
-
-        Parameters
-        ----------
-        graph_batch: torch_geometric.data.Data or torch_geometric.data.Batch
-            Graph object containing `x` and `edge_index` attributes and, optionally, an `edge_attr` attribute.
-
-        Returns
-        -------
-        torch.Tensor
-        """
         x = graph_batch.x
-        edge_index = graph_batch.edge_index
-        edge_attr = getattr(graph_batch, "edge_attr", None)
+        edge_index = getattr(graph_batch, self.edge_index_key)
+        edge_attr = getattr(graph_batch, self.edge_attr_key, None)
 
         if self.accepts_edge_attr and edge_attr is not None:
             x = self.graph_layer(x, edge_index, edge_attr)
@@ -60,8 +63,10 @@ class GNNModule(nn.Module):
 
         if self.batch_norm is not None:
             x = self.batch_norm(x)
+
         if self.activation is not None:
             x = self.activation(x)
+
         if self.dropout is not None:
             x = self.dropout(x)
 
@@ -69,7 +74,8 @@ class GNNModule(nn.Module):
 
 
 def build_graph_layers(gnn_params):
-    """Build a sequence of graph-convolution blocks from a parameter mapping.
+    """
+    Build a sequence of graph-convolution blocks from a parameter mapping.
 
     Parameters
     ----------
@@ -81,10 +87,12 @@ def build_graph_layers(gnn_params):
         * `input_dim`
         Optional keys are:
         * `args` (per-layer keyword mappings; default `{}` for every layer),
-        * `activation` (default "relu"),
+        * `activation` (default "silu"),
         * `dropout` (default 0.0),
         * `batch_norm` (default True)
         * `heads` for attention layers (default 1).
+        * `edge_index_key`: PyG key for edge_index
+        * `edge_attr_key`: PyG key for edge_attr
 
     Returns
     -------
@@ -96,9 +104,11 @@ def build_graph_layers(gnn_params):
     sizes = gnn_params["sizes"]
     input_dim = gnn_params["input_dim"]
     layer_args = gnn_params.get("args", [{} for _ in sizes])
-    activation = gnn_params.get("activation", "relu")
+    activation = gnn_params.get("activation", "silu")
     dropout = gnn_params.get("dropout", 0.0)
     batch_norm = gnn_params.get("batch_norm", True)
+    edge_index_key = gnn_params.get("edge_index_key", "edge_index")
+    edge_attr_key = gnn_params.get("edge_attr_key", "edge_attr")
 
     gnn_blocks = []
     in_dim = input_dim
@@ -120,7 +130,7 @@ def build_graph_layers(gnn_params):
             edge_dim = gnn_params["edge_dim"]
             gine_mlp = nn.Sequential(
                 nn.Linear(in_dim, out_dim),
-                nn.ReLU(),
+                get_activation_fn(activation),
                 nn.Linear(out_dim, out_dim)
             )
             next_in = out_dim
@@ -141,7 +151,9 @@ def build_graph_layers(gnn_params):
                 graph_layer=graph_layer,
                 batch_norm=batch_norm_layer,
                 activation=activation_layer,
-                dropout=dropout_layer
+                dropout=dropout_layer,
+                edge_index_key=edge_index_key,
+                edge_attr_key=edge_attr_key,
             )
         )
         in_dim = next_in
@@ -164,7 +176,7 @@ def build_gnn_config():
         raise ImportError(f"< build_gnn_config > requires < pytorch_geometric > library") from exc
 
     layer_types = ["convolutional", "attention", "edge", "gine"]
-    available_activations = ["relu", "leaky_relu", "gelu", "tanh"]
+    available_activations = ["relu", "leaky_relu", "gelu", "tanh", "silu"]
 
     def suggest_gnn_layers():
         return {
@@ -223,7 +235,7 @@ def build_gnn_config():
 
     while True:
         print(f"Available activations: {available_activations}")
-        activation = input("Select activation function [relu]: ").strip().lower() or "relu"
+        activation = input("Select activation function [silu]: ").strip().lower() or "silu"
         if activation in available_activations:
             break
         print("Unsupported activation function. Try again.")
@@ -250,6 +262,20 @@ def build_gnn_config():
         except ValueError:
             "Invalid answer. Try again."
 
+    while True:
+        try:
+            edge_index_key = input("Enter edge_index_key [edge_index]: ").strip() or "edge_index"
+            break
+        except ValueError:
+            "Invalid answer. Try again."
+
+    while True:
+        try:
+            edge_attr_key = input("Enter edge_attr_key [edge_attr]: ").strip() or "edge_attr"
+            break
+        except ValueError:
+            "Invalid answer. Try again."
+
     gnn_params = {
         "layer": layer_class,
         "layer_type": layer_type,
@@ -258,7 +284,9 @@ def build_gnn_config():
         "args": layer_args,
         "activation": activation,
         "dropout": dropout,
-        "batch_norm": batch_norm
+        "batch_norm": batch_norm,
+        "edge_index_key": edge_index_key,
+        "edge_attr_key": edge_attr_key,
     }
 
     if layer_type == "attention":
@@ -358,7 +386,7 @@ def build_conv_layers(cnn_params):
         * `kernel_size` (default `5`),
         * `stride` (default `1`)
         * `pool_size` (default `2`)
-        * `activation` (default "relu")
+        * `activation` (default "silu")
         * `dropout` (default `0.1`)
         * `batch_norm` (default `True`).
 
@@ -380,7 +408,7 @@ def build_conv_layers(cnn_params):
     kernel_size = cnn_params.get("kernel_size", 5)
     stride = cnn_params.get("stride", 1)
     dropout = cnn_params.get("dropout", 0.1)
-    activation_fn = get_activation_fn(cnn_params.get("activation", "relu"))
+    activation_fn = get_activation_fn(cnn_params.get("activation", "silu"))
     pool_kernel_size = cnn_params.get("pool_size", 2)
     batch_norm = cnn_params.get("batch_norm", True)
 
@@ -427,7 +455,7 @@ def build_cnn_config():
         Sequence-CNN configuration compatible with :func:`build_conv_layers`.
     """
     print("=== CNN Layer Configuration ===")
-    available_activations = ["relu", "leaky_relu", "gelu", "tanh"]
+    available_activations = ["relu", "leaky_relu", "gelu", "tanh", "silu"]
 
     while True:
         try:
@@ -495,7 +523,7 @@ def build_cnn_config():
 
     while True:
         print(f"Available activations: {available_activations}")
-        activation = input("Select activation function [relu]: ").strip().lower() or "relu"
+        activation = input("Select activation function [silu]: ").strip().lower() or "silu"
         if activation in available_activations:
             break
         print("Unsupported activation function. Try again.")
@@ -612,7 +640,7 @@ def build_recurrent_layers(rnn_params: dict):
         Optional keys are:
         * `padding_idx` defaults to 0
         * `batch_norm` defaults to True
-        * `activation` defaults to "relu" 
+        * `activation` defaults to "silu"
         * `dropout` defaults to `0.0`
 
     Returns
@@ -627,7 +655,7 @@ def build_recurrent_layers(rnn_params: dict):
     rnn_embedding = nn.Embedding(alphabet_len, embedding_dim, padding_idx=padding_idx)
     rnn_type = rnn_params.get("layer", "gru").lower()
     hidden_size = rnn_params.get("hidden_size", 256)
-    activation = rnn_params.get("activation", "relu")
+    activation = rnn_params.get("activation", "silu")
     dropout = rnn_params.get("dropout", 0.0)
     batch_norm = rnn_params.get("batch_norm", True)
 
@@ -701,10 +729,10 @@ def build_rnn_config():
         except ValueError:
             print("Invalid integer. Try again.")
 
-    available_activations = ["relu", "leaky_relu", "gelu", "tanh", "none"]
+    available_activations = ["relu", "leaky_relu", "gelu", "tanh", "none", "silu"]
     while True:
         print(f"Available activations: {available_activations}")
-        activation = input("Select activation function [relu]: ").strip().lower() or "relu"
+        activation = input("Select activation function [silu]: ").strip().lower() or "silu"
         if activation in available_activations:
             activation = None if activation == "none" else activation
             break
@@ -740,13 +768,13 @@ def build_rnn_config():
     }
 
 
-def build_linear_layers(sizes: List[int], batch_norm: bool = True,
-                        activation: Optional[str] = "relu", dropout: float = 0.0):
+def build_linear_layers(sizes: List[int], batch_norm: bool = True, activation: Optional[str] = "silu",
+                        dropout: float = 0.0):
     """
     Build a fully connected network from successive feature dimensions.
 
     Each linear layer is Xavier-normal initialized and followed, when enabled,
-    by batch normalization, an activation, and dropout, except for the last layer.
+    by batch normalization, an activation, and dropout.
 
     Parameters
     ----------
@@ -756,7 +784,7 @@ def build_linear_layers(sizes: List[int], batch_norm: bool = True,
         Whether to add batch normalization after each linear layer.
     activation: str or None
         Activation name accepted by :func:`get_activation_fn`; `None` omits
-        activation layers. Default value is `"relu"`.
+        activation layers. Default value is `"silu"`.
     dropout: float
         Dropout probability after each block. A value of `0.0` disables
         dropout. Default value is `0.0`.
@@ -779,7 +807,7 @@ def build_linear_layers(sizes: List[int], batch_norm: bool = True,
     lin_out_size = linear_sizes[-1]
     in_features = linear_sizes.pop(0)
 
-    for out_features in linear_sizes[:-1]:
+    for out_features in linear_sizes:
         linear = nn.Linear(in_features, out_features)
         init_linear(linear)
         linear_layers.append(linear)
@@ -792,8 +820,6 @@ def build_linear_layers(sizes: List[int], batch_norm: bool = True,
             linear_layers.append(nn.Dropout(p=dropout))
 
         in_features = out_features
-
-    linear_layers.append(nn.Linear(in_features, lin_out_size))
 
     return nn.Sequential(*linear_layers), lin_out_size
 
@@ -831,10 +857,10 @@ def build_linear_config():
         except ValueError:
             "Invalid answer. Try again."
 
-    available_activations = ["relu", "leaky_relu", "gelu", "tanh", "none"]
+    available_activations = ["relu", "leaky_relu", "gelu", "tanh", "silu", "none"]
     while True:
         print(f"Available activations: {available_activations}")
-        activation = input("Select activation function [relu]: ").strip().lower() or "relu"
+        activation = input("Select activation function [silu]: ").strip().lower() or "silu"
         if activation in available_activations:
             if activation == "none":
                 activation = None

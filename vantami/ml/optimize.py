@@ -1,20 +1,16 @@
-import inspect
-from itertools import product
 from copy import deepcopy
-from typing import Any
+from typing import Literal, TypeAlias
 
-import numpy as np
-import pandas as pd
-import polars as pl
-import optuna
-
-from vantami.ml.models import Unit, Ensemble, ClassifierUnit, RegressorUnit, ClassifierEnsemble, RegressorEnsemble
+from vantami.ml.models import Unit, Ensemble, ClassifierEnsemble, RegressorEnsemble
 from vantami.ml.utils import *
 from vantami.ml.params import *
 from vantami.data.manager import KFoldManager
 
 
-def train_ensemble(unit: Unit, dataset_manager: KFoldManager, task: str = 'regression'):
+TaskType: TypeAlias = Literal["regression", "classification"]
+
+
+def train_ensemble(unit: Unit, dataset_manager: KFoldManager, task: TaskType = "regression"):
     """
     Train an ensemble model based on dataset with KFold split.
 
@@ -24,7 +20,7 @@ def train_ensemble(unit: Unit, dataset_manager: KFoldManager, task: str = 'regre
         A Unit to use for training.
     dataset_manager: KFoldManager
         Dataset manager
-    task: str
+    task: TaskType
         Regression or classification
 
     Returns
@@ -35,7 +31,7 @@ def train_ensemble(unit: Unit, dataset_manager: KFoldManager, task: str = 'regre
     ensemble_class = {"regression": RegressorEnsemble, "classification": ClassifierEnsemble}.get(task)
 
     if ensemble_class is None:
-        raise ValueError(f'Task should be either "regression" or "classification", got < {task} > instead.')
+        raise ValueError(f"Task should be either `regression` or `classification`, got < {task} > instead.")
 
     ensemble = ensemble_class()
 
@@ -53,21 +49,44 @@ def train_ensemble(unit: Unit, dataset_manager: KFoldManager, task: str = 'regre
     return ensemble
 
 
-def optuna_search(model_name: str, dataset_manager: KFoldManager, optimization_metric: str = 'RMSE',
-                  task: str = 'regression', n_trials: int = 64, n_jobs: int = 1, config: Dict[str, Any] = None):
+def optuna_search(model_name: str, dataset_manager: KFoldManager, optimization_metric: str = "RMSE",
+                  task: TaskType = "regression", n_trials: int = 64, n_jobs: int = 1,
+                  config: Dict[str, Any] | None = None):
+    """
+    Find optimal hyperparameters for a given model and data using Optuna
 
-    # select optimization direction
-    if optimization_metric in ['Recall', 'Accuracy', 'ROC AUC', 'Precision', 'F1 Score',
-                               'MCC', 'R2', 'Balanced Accuracy', 'Specificity', 'PRC AUC']:
-        direction = 'maximize'
+    Parameters
+    ----------
+    model_name: str
+        Model of the name to use. Must be available in ml.params
+    dataset_manager: KFoldManager
+        Initialized KFoldManager object
+    optimization_metric: str
+        Metric used to select the best hyperparameters
+    task: Literal["regression", "classification"]
+        Either `regression` or `classification`
+    n_trials: int
+        Number of trials to run
+    n_jobs: int
+        Number of CPUs to use for model training
+    config: Dict[str, Any] | None
+        Configuration dictionary for Unit
+
+    Returns
+    -------
+    study, best_ensemble, best_params
+    """
+    if optimization_metric in ["Recall", "Accuracy", "ROC AUC", "Precision", "F1 Score",
+                               "MCC", "R2", "Balanced Accuracy", "Specificity", "PRC AUC"]:
+        direction = "maximize"
     else:
-        direction = 'minimize'
+        direction = "minimize"
 
     features = dataset_manager.features_col
 
     best_ensemble = None
     best_params = None
-    best_metric = float('-inf') if direction == 'maximize' else float('inf')
+    best_metric = float("-inf") if direction == "maximize" else float("inf")
 
     def objective(trial: optuna.trial.Trial):
         nonlocal best_ensemble, best_params, best_metric
@@ -107,8 +126,8 @@ def optuna_search(model_name: str, dataset_manager: KFoldManager, optimization_m
         except (ValueError, TypeError, FloatingPointError) as exc:
             raise optuna.TrialPruned(f"Trial {trial.number} pruned: {exc}") from exc
 
-        is_better = (direction == 'maximize' and metric > best_metric) or \
-                    (direction == 'minimize' and metric < best_metric)
+        is_better = (direction == "maximize" and metric > best_metric) or \
+                    (direction == "minimize" and metric < best_metric)
 
         if is_better:
             best_metric = metric

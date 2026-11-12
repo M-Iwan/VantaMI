@@ -2,7 +2,6 @@ from typing import Optional, Dict, Union, List, Any
 
 import numpy as np
 import numpy.typing as npt
-import pandas as pd
 import polars as pl
 
 
@@ -16,7 +15,7 @@ class KFoldManager:
         The stored DataFrame containing all data.
     smiles_col: str
         Name of the column containing SMILES strings.
-    features_col: Union[str, List[str]]
+    features_col: str | List[str]
         Name(s) of the column containing features.
     target_col: str
         Name of the column containing target values.
@@ -24,9 +23,9 @@ class KFoldManager:
         Name of the column containing fold assignments.
     test_fold: int
         Fold to be used for testing.
-    weights_col: str or None
+    weights_col: str | None
         Name of the column containing sample weights, if provided.
-    groups_col: str or None
+    groups_col: str | None
         Name of the column containing groups, if provided.
 
     Attributes
@@ -35,7 +34,7 @@ class KFoldManager:
         The stored DataFrame containing all data.
     smiles_col: str
         Name of the column containing SMILES strings.
-    features_col: Union[str, List[str]]
+    features_col: str | List[str]
         Name(s) of the column containing features.
     target_col: str
         Name of the column containing target values.
@@ -43,9 +42,9 @@ class KFoldManager:
         Name of the column containing fold assignments.
     test_fold: int
         Fold to be used for testing.
-    weights_col: str or None
+    weights_col: str | None
         Name of the column containing sample weights, if provided.
-    groups_col: str or None
+    groups_col: str | None
         Name of the column containing groups, if provided.
 
     x_array: Dict[str, npt.NDArray]
@@ -82,8 +81,8 @@ class KFoldManager:
     get_non_test_data()
         Get non-test data (features, targets, weights).
     """
-    def __init__(self, df: pl.DataFrame, smiles_col: str, features_col: Union[str, List[str]], target_col: str, fold_col: str, test_fold: int,
-                 weights_col: Optional[str] = None, groups_col: Optional[str] = None):
+    def __init__(self, df: pl.DataFrame, smiles_col: str, features_col: str | List[str], target_col: str, fold_col: str,
+                 test_fold: int, weights_col: str | None = None, groups_col: str | None = None):
 
         if isinstance(features_col, str):
             features_col = [features_col]
@@ -96,7 +95,7 @@ class KFoldManager:
 
         missing_cols = [col for col in required_cols if col not in df.columns]
         if missing_cols:
-            raise KeyError(f'Missing column(s) in DataFrame: {missing_cols}')
+            raise KeyError(f"Missing column(s) in DataFrame: {missing_cols}")
 
         self.df = df
         self.smiles_col = smiles_col
@@ -109,73 +108,79 @@ class KFoldManager:
 
         self.x_array = {f_col: np.vstack(self.df[f_col].to_numpy()) for f_col in self.features_col}
         self.y_true = self.df[self.target_col].to_numpy()  # 1D numpy array
-        self.s_array = self.df[self.smiles_col].to_numpy() # 1D numpy array
+        self.s_array = self.df[self.smiles_col].to_numpy()  # 1D numpy array
 
         if self.weights_col is not None:
-            self.w_array = self.df[self.weights_col].to_numpy() # 1D numpy array
+            self.w_array = self.df[self.weights_col].to_numpy()  # 1D numpy array
         else:
             self.w_array = None
 
         if self.groups_col is not None:
-            self.g_array = self.df[self.groups_col].to_numpy() # 1D numpy array of whatever
+            self.g_array = self.df[self.groups_col].to_numpy()  # 1D numpy array of whatever
         else:
             self.g_array = None
 
         self.splits = self.df[self.fold_col].to_numpy()
         all_folds = sorted(np.unique(self.splits))
         if self.test_fold not in all_folds:
-            raise ValueError(f'Test fold {test_fold} missing from < {self.fold_col} > column')
+            raise ValueError(f"Test fold {test_fold} missing from < {self.fold_col} > column")
 
         self.folds = np.array([fold for fold in all_folds if fold != self.test_fold])
 
-        self.train_idxs = {fold: np.where((self.splits != fold) & (self.splits != self.test_fold))[0] for fold in self.folds}
-        self.eval_idxs = {fold: np.where(self.splits == fold)[0] for fold in self.folds}
+        self.train_idxs = {
+            fold: np.where((self.splits != fold) & (self.splits != self.test_fold))[0]
+            for fold in self.folds
+        }
+        self.eval_idxs = {
+            fold: np.where(self.splits == fold)[0]
+            for fold in self.folds
+        }
         self.test_idxs = np.where(self.splits == self.test_fold)[0]
         self.non_test_idxs = np.where(self.splits != self.test_fold)[0]
 
-    def get_train_data(self, fold: int) -> Dict[str, np.ndarray]:
+    def get_train_data(self, fold: int) -> Dict[str, Any]:
         if fold == self.test_fold:
-            raise ValueError(f'Cannot access test fold < {self.test_fold} > during training')
+            raise ValueError(f"Cannot access test fold < {self.test_fold} > during training")
 
         if fold not in self.folds:
-            raise ValueError(f'Fold {fold} is not in present in DataFrame')
+            raise ValueError(f"Fold < {fold} > is not in present in DataFrame")
 
         idx = self.train_idxs[fold]
         return {
-            'x_array': {f_col: self.x_array[f_col][idx, :] for f_col in self.features_col},
-            'y_true': self.y_true[idx],
-            'sample_weight': self.w_array[idx] if self.w_array is not None else None,
-            'groups': self.g_array[idx] if self.g_array is not None else None
+            "x_array": {f_col: self.x_array[f_col][idx, :] for f_col in self.features_col},
+            "y_true": self.y_true[idx],
+            "sample_weight": self.w_array[idx] if self.w_array is not None else None,
+            "groups": self.g_array[idx] if self.g_array is not None else None
         }
 
     def get_eval_data(self, fold: int) -> Dict[str, Any]:
         if fold == self.test_fold:
-            raise ValueError(f'Cannot access test fold < {self.test_fold} > during evaluation')
+            raise ValueError(f"Cannot access test fold < {self.test_fold} > during evaluation")
         if fold not in self.folds:
-            raise ValueError(f'Fold {fold} is not in present in DataFrame')
+            raise ValueError(f"Fold < {fold} > is not in present in DataFrame")
 
         idx = self.eval_idxs[fold]
         return {
-            'x_array': {f_col: self.x_array[f_col][idx, :] for f_col in self.features_col},
-            'y_true': self.y_true[idx],
-            'sample_weight': self.w_array[idx] if self.w_array is not None else None,
-            'groups': self.g_array[idx] if self.g_array is not None else None
+            "x_array": {f_col: self.x_array[f_col][idx, :] for f_col in self.features_col},
+            "y_true": self.y_true[idx],
+            "sample_weight": self.w_array[idx] if self.w_array is not None else None,
+            "groups": self.g_array[idx] if self.g_array is not None else None
         }
 
     def get_test_data(self) -> Dict[str, Any]:
         return {
-            'x_array': {f_col: self.x_array[f_col][self.test_idxs, :] for f_col in self.features_col},
-            'y_true': self.y_true[self.test_idxs],
-            'sample_weight': self.w_array[self.test_idxs] if self.w_array is not None else None,
-            'groups': self.g_array[self.test_idxs] if self.g_array is not None else None
+            "x_array": {f_col: self.x_array[f_col][self.test_idxs, :] for f_col in self.features_col},
+            "y_true": self.y_true[self.test_idxs],
+            "sample_weight": self.w_array[self.test_idxs] if self.w_array is not None else None,
+            "groups": self.g_array[self.test_idxs] if self.g_array is not None else None
         }
 
     def get_non_test_data(self) -> Dict[str, Any]:
         return {
-            'x_array': {f_col: self.x_array[f_col][self.non_test_idxs, :] for f_col in self.features_col},
-            'y_true': self.y_true[self.non_test_idxs],
-            'sample_weight': self.w_array[self.non_test_idxs] if self.w_array is not None else None,
-            'groups': self.g_array[self.non_test_idxs] if self.g_array is not None else None
+            "x_array": {f_col: self.x_array[f_col][self.non_test_idxs, :] for f_col in self.features_col},
+            "y_true": self.y_true[self.non_test_idxs],
+            "sample_weight": self.w_array[self.non_test_idxs] if self.w_array is not None else None,
+            "groups": self.g_array[self.non_test_idxs] if self.g_array is not None else None
         }
 
     def get_train_smiles(self, fold: int):
@@ -201,47 +206,47 @@ class TTManager:
         Polars DataFrame containing feature data, target values, and set assignments.
     smiles_col: str
         Name of the column containing SMILES strings.
-    features_col: Union[str, List[str]]
+    features_col: str | List[str]
         Name(s) of the column containing features.
     target_col: str
         Name of the column containing target values.
     set_col: str
         Name of the column containing set assignments.
-    weights_col: Optional[str]
+    weights_col: str | None
         Name of the column containing sample weights, if provided.
-    groups_col: Optional[str]
+    groups_col: str | None
         Name of the column containing groups, if provided.
 
     Attributes
     ----------
-    df : pl.DataFrame
+    df: pl.DataFrame
         Polars DataFrame containing feature data, target values, and set assignments.
     smiles_col: str
         Name of the column containing SMILES strings.
-    features_col: Union[str, List[str]]
+    features_col: str | List[str]
         Name(s) of the column containing features.
     target_col: str
         Name of the column containing target values.
     set_col: str
         Name of the column containing set assignments.
-    weights_col: Optional[str]
+    weights_col: str | None
         Name of the column containing sample weights, if provided.
-    groups_col: Optional[str]
+    groups_col: str | None
         Name of the column containing groups, if provided.
 
     x_array: Dict[str, npt.NDArray]
         Dictionary mapping column names to 2D arrays of features.
-    y_true : numpy.ndarray
+    y_true: npt.NDArray
         1D array of target values extracted from the DataFrame.
-    w_array : numpy.ndarray
+    w_array: npt.NDArray
         1D array of sample weights (ones if weights_col is None).
-    g_array : numpy.ndarray
+    g_array: npt.NDArray
         1D array of group assignments.
-    s_array : numpy.ndarray
+    s_array: npt.NDArray
         1D array of SMILES strings.
-    train_idxs : dict
+    train_idxs: Dict
         Row indices for train samples
-    test_idxs: np.ndarray
+    test_idxs: npt.NDArray
         Row indices for test samples.
 
     Methods
@@ -251,8 +256,9 @@ class TTManager:
     get_test_data()
         Get testing data (features, targets, weights, groups) for the test set.
     """
-    def __init__(self, df: pl.DataFrame, smiles_col: str, features_col: Union[str, List[str]], target_col: str,
-                 set_col: str, weights_col: Optional[str] = None, groups_col: Optional[str] = None):
+
+    def __init__(self, df: pl.DataFrame, smiles_col: str, features_col: str | List[str], target_col: str,
+                 set_col: str, weights_col: str | None = None, groups_col: str | None = None):
 
         if isinstance(features_col, str):
             features_col = [features_col]
@@ -265,7 +271,7 @@ class TTManager:
 
         missing_cols = [col for col in required_cols if col not in df.columns]
         if missing_cols:
-            raise KeyError(f'Missing column(s) in DataFrame: {missing_cols}')
+            raise KeyError(f"Missing column(s) in DataFrame: {missing_cols}")
 
         self.df = df
 
@@ -278,15 +284,15 @@ class TTManager:
 
         self.x_array = {f_col: np.vstack(self.df[f_col].to_numpy()) for f_col in self.features_col}
         self.y_true = self.df[self.target_col].to_numpy()  # 1D numpy array
-        self.s_array = self.df[self.smiles_col].to_numpy() # 1D numpy array
+        self.s_array = self.df[self.smiles_col].to_numpy()  # 1D numpy array
 
         if self.weights_col is not None:
-            self.w_array = self.df[self.weights_col].to_numpy() # 1D numpy array
+            self.w_array = self.df[self.weights_col].to_numpy()  # 1D numpy array
         else:
             self.w_array = None
 
         if self.groups_col is not None:
-            self.g_array = self.df[self.groups_col].to_numpy() # 1D numpy array of whatever
+            self.g_array = self.df[self.groups_col].to_numpy()  # 1D numpy array of whatever
         else:
             self.g_array = None
 
@@ -300,18 +306,18 @@ class TTManager:
 
     def get_train_data(self) -> Dict[str, Any]:
         return {
-            'x_array': {f_col: self.x_array[f_col][self.train_idxs, :] for f_col in self.features_col},
-            'y_true': self.y_true[self.train_idxs],
-            'sample_weight': self.w_array[self.train_idxs] if self.w_array is not None else None,
-            'groups': self.g_array[self.train_idxs] if self.g_array is not None else None
+            "x_array": {f_col: self.x_array[f_col][self.train_idxs, :] for f_col in self.features_col},
+            "y_true": self.y_true[self.train_idxs],
+            "sample_weight": self.w_array[self.train_idxs] if self.w_array is not None else None,
+            "groups": self.g_array[self.train_idxs] if self.g_array is not None else None
         }
 
     def get_test_data(self) -> Dict[str, Any]:
         return {
-            'x_array': {f_col: self.x_array[f_col][self.test_idxs, :] for f_col in self.features_col},
-            'y_true': self.y_true[self.test_idxs],
-            'sample_weight': self.w_array[self.test_idxs] if self.w_array is not None else None,
-            'groups': self.g_array[self.test_idxs] if self.g_array is not None else None
+            "x_array": {f_col: self.x_array[f_col][self.test_idxs, :] for f_col in self.features_col},
+            "y_true": self.y_true[self.test_idxs],
+            "sample_weight": self.w_array[self.test_idxs] if self.w_array is not None else None,
+            "groups": self.g_array[self.test_idxs] if self.g_array is not None else None
         }
 
     def get_train_smiles(self):

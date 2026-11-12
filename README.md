@@ -16,7 +16,7 @@ update to a specific module.
 
 ### Repository Structure
 
-Current version: 0.5.3rc3
+Current version: 0.6.0ts1
 
 ```
 vantami/

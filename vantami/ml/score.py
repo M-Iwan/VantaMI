@@ -1,20 +1,18 @@
-from collections import defaultdict
-from typing import Optional, Dict
-
 import numpy as np
+import numpy.typing as npt
 
 
-def ece_score(y_true: np.ndarray, y_score: np.ndarray, sample_weight: np.ndarray = None, n_bins: int = 10):
+def ece_score(y_true: npt.NDArray, y_score: npt.NDArray, sample_weight: npt.NDArray | None = None, n_bins: int = 10):
     """
     Compute the Expected Calibration Error score.
 
     Parameters
     ----------
-    y_true : np.ndarray
+    y_true: npt.NDArray
         Array with true binary values
-    y_score: np.ndarray
+    y_score: npt.NDArray
         Predicted probabilities in range [0, 1]
-    sample_weight : np.ndarray
+    sample_weight: npt.NDArray | None
         Array of sample weights. Must be the same shape as y_true
     n_bins: int
         Number of bins to use. Default is 10.
@@ -35,7 +33,6 @@ def ece_score(y_true: np.ndarray, y_score: np.ndarray, sample_weight: np.ndarray
     for bin_idx in range(n_bins):
         mask = bin_indices == bin_idx
 
-        # these are sometimes empty
         if np.sum(mask) == 0:
             continue
 

@@ -1,26 +1,36 @@
-# [0.5.3]: 05-11-2026
+# [0.6.0]: 12-11-2026
+
 [Added]
+
 - Conformer generation script
 - Automated directory building to IO functions
-- Zarr-backed datasets for Deep Learning
-- New module (vantami.dl.storage) for serializing supported modalities to Zarr
+- LMDB-backed datasets for Deep Learning
+- New module (vantami.dl.storage) for serializing supported modalities to LMDB
 - Parallel graph construction for GraphVectorizer
 - Parallel string tokenization for StringVectorizer
 - Spatial encoding for GraphVectorizer
 
 [Updated]
+
 - Cleaned, added docstrings, and generally updated both vantami.dl.modules and vantami.dl.models/unit
+- Merged Molecule and DeepMolecule to a more clean part
+- Dedicated methods for 3D Mordred descriptors
+- General formatting, efficiency, docstrings and related updates for most modules
 
 [Changed]
+
 - Updated Uni-pKa scripts to a final working version
 - Split vantami.dl.models into vantami.dl.unit, which hosts the ABC, and vantami.dl.models for implemented models
 
 [Fixed]
+
 - Incorrect argument parsing in brier_score_loss (vantami.ml.models:ClassifierUnit)
 - joblib and pickle IO for pandas
 
 # [0.5.2]: 02-11-2026
+
 [Added]
+
 - Support for Mordred descriptors using community maintained Mordred package
 - Parameters for RandomSearch
 - Setup files for Uni-pKa allowing for calculating (the most likely) protonation states at a given pH
@@ -30,25 +40,33 @@
 - Manager for conformational searches using DeepMolecules
 
 [Changed]
-- Split Graph and String Vectorizers to separate files 
+
+- Split Graph and String Vectorizers to separate files
 
 [Renamed]
+
 - vantami.cache to vantami.paths
 - vantami.deep to vantami.dl
 - vantami.chemistry to vantami.chem
 
 # [0.5.1]: 16-10-2026
+
 [Added]
+
 - XTB calculations support for Molecule in vantami.chemistry.molecule
 
 [Changed]
+
 - All Embedders limit the n_components to max(n_components, n_samples)
 
 [Fixed]
+
 - Fixed all (probably) bugs introduced in the previous version
 
 # [0.5.0]: 14-10-2026
+
 [Added]
+
 - Extended Unit and Ensemble functionality for multi-modal modeling
 - Support for multiple feature groups passed as Dict[str, npt.NDArray]
 - Support for sequential transformations within a feature group, such as DataTransformer followed by PCA or UMAP
@@ -59,6 +77,7 @@
 - Optuna parameter samplers for LGBMClassifier and CatBoostClassifier
 
 [Changed]
+
 - Updated KFoldManager and TTManager to store feature arrays as Dict[str, npt.NDArray]
 - Updated training, ensemble, and Optuna utilities for the multi-modal Unit API
 - Extended DataTransformer with improved feature-count tracking, input-shape validation, reset support, and additional preprocessing checks
@@ -67,27 +86,35 @@
 - Updated dataframe PCA and UMAP utilities to transform an optional second dataframe using the fitted embedding model
 
 [Removed]
+
 - All already deprecated code in /deprecated
 - old functions from vantami.ml.optimize - Optuna is currently the main supported framework
-- most of the code from vantami.ml.score module - long superseded by Unit/Ensemble code 
+- most of the code from vantami.ml.score module - long superseded by Unit/Ensemble code
 
 [Broke]
+
 - Probably something broke along the way, these will be addressed in sub-updates to version 0.5.0
 
 # [0.4.6]: 08-10-2026
+
 [Added]
+
 - Modeling configurations for new descriptors
 - Array concatenation in dataframes with automated data type detection
 
 [Changed]
+
 - Embedding functions (like dataframe_2_pca) now accept 2nd dataframe to also transform it
 - Return schema for NLP and Molecular descriptors to polars Arrays
 
 [Fixed]
+
 - missing imports in vantami.ml.utils
 
 # [0.4.5]: 07-10-202
+
 [Added]
+
 - Molecular Embedding using MolEncoder from Fabian
 - Sentence Embedding using MiniLM and Qwen3
 - Cache support for all above models
@@ -95,112 +122,131 @@
 - UMAP, PCA, and t-SNE embeddings
 
 [Changed]
+
 - Extended LMM summaries (R module)
 
 # [0.4.4]: 16-09-2026
+
 [Added]
+
 - Efficient implementation of pairwise-distance calculations, with automated backend selection (RDKit/SciPy)
 - Support for dense distance matrices, thresholded neighborhood matrices, and sparse distance graphs
 - New clustering methods:
-  - DBSCAN
-  - HDBSCAN
-  - Agglomerative
-  - Spectral
-  - OPTICS
-  - KMeans
+  * DBSCAN
+  * HDBSCAN
+  * Agglomerative
+  * Spectral
+  * OPTICS
+  * KMeans
 - Random- and fixed-effects checks for Linear Mixed Models
 
 [Changed]
+
 - Standardized and cleaned up public APIs for descriptor calculations
 - Moved bin_data from data.manipulation to data.partition
 - Updated the Butina Clustering implementation
 
 [Removed]
+
 - data.manipulate module in lieu of automated embedding conversions
 
 # [0.4.3]: 03-09-2026
+
 [Added]
+
 - PyPI release
 - Renamed to VantaMI as NovaMI was taken on PyPI
 
 # [0.4.2]: 21-08-2026
 
 [Added]
+
 - R-based repository called vantami-r with code for Linear Mixed Models analyses
 - More functions for flagging and filtering compounds
 - New module: stats; so far with Mann-Whitney U-test
 - New function for string distances
 
 [Changed]
+
 - tokenize_documents supports various filters (alpha, alnum, ascii)
 
 # [0.4.1]: 11-08-2026
 
 [Added]
+
 - Full update of the standardize module:
-  - moved from pandas to polars
-  - added support for parallel processing
-  - added additional normalization step and reionize/unionize step
+  * moved from pandas to polars
+  * added support for parallel processing
+  * added additional normalization step and reionize/unionize step
 - Added function for deduplication of mixed censored/exact data (mad_censored_duplicates)
 - Added more filtering options
 
 # [0.4.0]: 22-04-2026
 
 [Added]
+
 - Finished cleaning up the novami.deep module; all classes, functions, and DL templates *should* work well with each other
 - Partially missing documentation in the novami.deep.vectorizer and utils
 - Unit test suite for molecular descriptors, distance calculations, partition, and data loading of deep module
 
 [Fixed]
+
 - Fixed the swapped GetFingerprintAsNumpy and GetCountFingerprintAsNumpy calls in smiles_2_* when a single SMILES string was passed
 - Non-compatible Float32 assignment in outlier filter. Now uses Float64
 
 [Removed]
+
 - The remaining old code from the novami.deep module
 
 # [0.3.5]: 01-04-2026
 
 [Added]
+
 - Extend functionality of group_k_neighbors_distance
 - Add W.I.P. Winsorization to DataTransformer
 - (Partially) clean the deep module
-- ``MMDataset`` / ``MMBatch``, ``MMLoader``, and ``MMTUnit`` as the primary deep stack; legacy ``GNNRegressor``
-and ``MMGV`` moved under ``deprecated/deep/`` with optional re-exports
+- `MMDataset` / `MMBatch`, `MMLoader`, and `MMTUnit` as the primary deep stack
 - Calculations for Precision-Recall Curve AUC, Expected Calibration Error, Brier Score
 - New QCG template for KFold-like calculations
 
 [Fixed]
+
 - The MAD deduplication procedure is now used
 
 [Removed]
-- A lot of old code from the novami.deep module
-- ``vantami/deep/model.py`` (MMMTGNN and backbones); use ``deprecated/deep/mmmtgnn.py`` instead
+
+- A lot of old code from the vantami.deep module
+- `vantami/deep/model.py` (MMMTGNN and backbones)
 
 
 # [0.3.4]: 25-02-2026
 
 [Added]
+
 - Added support for calculating distance distribution to self in data.distance.k_neighbors_distance
 - Added wrapper around k_neighbors_distance that calculates them over groups: data.distance.group_k_neighbors_distance
 
 [Fixed]
+
 - Functions in data.descriptors now correctly parse provided < smiles_col > argument instead of setting it to "SMILES"
 
 # [0.3.3]: 19-02-2026
 
 [Added]
+
 - Added support for parallel calculation of all available descriptors (except CDDD and Mordred)
 - Added AtomPairs descriptors
 - Added support for Count-variants of ECFP, Daylight and AtomPair fingerprints
+- 
 [Changed]
-- Slightly modified ml.augood module - the data is now transformed before clustering so that metrics like
-cosine distance actually can work
+- 
+- Slightly modified ml.augood module - the data is now transformed before clustering so that metrics like cosine work
 
 ## [0.3.2]: 18-02-2026
 
 [Added]
-- Completed the good_curve function in the ml.augood module - now fully integrated with the rest of
-the repository!
+
+- Completed the good_curve function in the ml.augood module
 - Support for Daylight path-based FPs and MAPC fingerprints
 - Files needed for dataframe_2_klek are (well, should be) now automatically included!
 - New manager for Train-Test splits (TTManager, data.manager)
@@ -208,31 +254,37 @@ the repository!
 - New module: novami.utils for small and often used functions
 
 [Changed]
-- Files for data.descriptors now use .joblib instead of .pkl for better compatibility 
+
+- Files for data.descriptors now use .joblib instead of .pkl for better compatibility
 - DatasetManager renamed to KFoldManager to differentiate from TTManager
 - Exposed read_pl and write_pl in novami.io module for easier imports
 - Functions kf_evaluate and tt_evaluate in ml.evaluate now integrated with the rest of the code
 
 [Removed]
+
 - Old code in ml.evaluate
 
 [Fixed]
+
 - Missing parameter in RegressorAnalyzer
 
 ## [0.3.1]: 04-02-2026
 
 [Added]
-- New module: ml.augood:
-  - good_curve (Generalization Out Of Distribution) curve using KFold evaluation
+
+- ml.augood: good_curve (Generalization Out Of Distribution) curve using KFold evaluation
 
 [Changed]
+
 - Renamed data.similarity to data.distance (as all functions there were based on distance metrics anyway)
 - Minor corrections and bug-fixes (missing imports, optional imports for some functions)
 
 [Removed]
+
 - Removed deprecated/visualize/ecdf.py
 - Removed projects/drid (now available as separate repository at https://github.com/M-Iwan/CARBIDE)
 - Removed data/process in favour of data/manipulate
 
 ## [0.3.0]: 29-01-2026
+
 Public Release of the repository
