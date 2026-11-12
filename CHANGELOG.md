@@ -15,6 +15,7 @@
 - Cleaned, added docstrings, and generally updated both vantami.dl.modules and vantami.dl.models/unit
 - Merged Molecule and DeepMolecule to a more clean part
 - Dedicated methods for 3D Mordred descriptors
+- General formatting, efficiency, docstrings and related updates for most modules
 
 [Changed]
 
