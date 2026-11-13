@@ -9,13 +9,13 @@ from itertools import chain
 
 try:
     from rdkit import Chem, RDLogger
+    from scipy.spatial import cKDTree
     import torch
     from torch_geometric.data import Data
-    from torch_geometric.nn import radius_graph
     from vantami.chem.molecule import Molecule
     from vantami.data.partition import batch_data
 except ImportError as exc:
-    raise ImportError(f"GraphVectorizer requires rdkit, torch, torch_geometric, and torch_cluster") from exc
+    raise ImportError(f"GraphVectorizer requires rdkit, torch, torch_geometric, and scipy") from exc
 
 import warnings
 warnings.simplefilter(action="ignore", category=FutureWarning)
@@ -216,6 +216,58 @@ class GraphVectorizer:
 
         if suppress:
             RDLogger.DisableLog("rdApp.*")
+
+    @staticmethod
+    def radius_graph(pos: torch.Tensor, r_cut: float = 6.0, max_neighbors: int = 64) -> torch.Tensor:
+        """
+        Build directed radius-graph connectivity.
+
+        Parameters
+        ----------
+        pos: torch.Tensor
+            A [num_atoms, 3] tensor of coordinates.
+        r_cut: float
+            Cutoff for spatial edges
+        max_neighbors: int
+            Maximum number of neighbors to encode per atom
+        """
+        if pos.ndim != 2 or pos.shape[1] != 3:
+            raise ValueError(f"Expected positions with shape [num_atoms, 3], got {tuple(pos.shape)}.")
+
+        coordinates = pos.numpy()
+        n_nodes = coordinates.shape[0]
+
+        if n_nodes == 0:
+            return torch.empty((2, 0), dtype=torch.long)
+
+        tree = cKDTree(coordinates)
+        neighbor_lists = tree.query_ball_point(coordinates, r=r_cut)
+
+        source_indices: list[int] = []
+        target_indices: list[int] = []
+
+        for target_idx, neighbors in enumerate(neighbor_lists):
+            neighbors = [neighbor_idx for neighbor_idx in neighbors if neighbor_idx != target_idx]
+
+            if not neighbors:
+                continue
+
+            if len(neighbors) > max_neighbors:
+                neighbors = sorted(
+                    neighbors,
+                    key=lambda neighbor_idx: (
+                        float(np.linalg.norm(coordinates[neighbor_idx] - coordinates[target_idx])),
+                        neighbor_idx,
+                    ),
+                )[:max_neighbors]
+
+            source_indices.extend(neighbors)
+            target_indices.extend([target_idx] * len(neighbors))
+
+        if not source_indices:
+            return torch.empty((2, 0), dtype=torch.long)
+
+        return torch.tensor([source_indices, target_indices], dtype=torch.long)
 
     @staticmethod
     def get_atom_encoding(smiles: List[str]) -> Dict[str, int]:
@@ -768,12 +820,10 @@ class GraphVectorizer:
         self.set_rbf(r_cut=r_cut, n_rbf=n_rbf)
         assert self.gaussian_rbf is not None
 
-        edge_index = radius_graph(
-            x=pos,
-            r=r_cut,
-            batch=None,
-            loop=False,
-            max_num_neighbors=max_neighbors,
+        edge_index = self.radius_graph(
+            pos=pos,
+            r_cut=r_cut,
+            max_neighbors=max_neighbors,
         )
 
         graph.spatial_edge_index = edge_index
