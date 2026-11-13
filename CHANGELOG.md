@@ -9,6 +9,8 @@
 - Parallel graph construction for GraphVectorizer
 - Parallel string tokenization for StringVectorizer
 - Spatial encoding for GraphVectorizer
+- Support for Mixed Precision training for MMUnit and derived classes
+- DL models
 
 [Updated]
 
