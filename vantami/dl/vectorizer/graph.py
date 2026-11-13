@@ -437,7 +437,7 @@ class GraphVectorizer:
 
     def from_molecule(self, molecule: Molecule, charge_method: ChargeMethod = "Gasteiger",
                       energy_method: EnergyMethod = "MMFF94", heavy_only: bool = True, combine_hydrogens: bool = False,
-                      include_pos: bool = True) -> Data:
+                      include_pos: bool = True, include_id: bool = True) -> Data:
         """
         Generate a PyTorch Geometric graph from a prepared Molecule object.
 
@@ -456,6 +456,8 @@ class GraphVectorizer:
             Whether to combine hydrogen charges with their associated heavy atoms.
         include_pos: bool
             Whether to include atom positions in the Data object.
+        include_id: bool
+            Whether to persist Molecule.id in the graph.
 
         Returns
         -------
@@ -481,6 +483,8 @@ class GraphVectorizer:
 
         if include_pos:
             graph_data["pos"] = torch.from_numpy(positions).to(dtype=self.geometry_dtype)
+        if include_id:
+            graph_data["id"] = molecule.id
 
         return Data(**graph_data)
 
