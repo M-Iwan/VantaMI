@@ -1,13 +1,11 @@
 from copy import copy
-from typing import Dict, Optional, Tuple, Any, Iterable, List
-
-import numpy as np
+from typing import Dict, Tuple, Any, Iterable, List
 
 import torch
 from torch import Tensor, nn
-from torch_geometric.nn import global_mean_pool, global_add_pool
+from torch_geometric.nn import global_mean_pool
 
-from vantami.dl.unit import MMUnit, MMRegressionUnit, MMClassificationUnit
+from vantami.dl.unit import MMRegressionUnit
 from vantami.dl.modules import build_graph_layers, build_linear_layers
 
 
@@ -15,62 +13,69 @@ LossSummary = Dict[str, Any]
 LossValue = Tuple[Tensor, Tensor]
 
 
-class SpatialGINEConv(MMRegressionUnit):
+class SingleGNN(MMRegressionUnit):
     """
-    Dual channel covalent/spatial graph neural network.
-    
-    Parameters
-    ----------
-    device: str
-        Device to use. Default is cpu.
-    node_input_size: int
-        Node encoding size.
-    cov_gnn_params: dict
-        Dictionary of GNN parameters for covalent channel
-    spatial_gnn_params: dict
-        Dictionary of GNN parameters for spatial channel
-    lin_params: dict
-        Dictionary for build_linear_layers
-    num_task: int, optional
-        Number of regression outputs
-    keep_fraction: float, optional
-        Fraction of target values to use for loss
-    max_grad_norm: float
-        Gradient clipping max norm in fit_epoch. Default is 1.0.
-    verbose: int, optional
-        Set verbosity level. 0 = no logs, 1 = standard progress, 2 = debugging
-    model_name: str, optional
-        Name of the model
+    Single channel covalent graph neural network.
     """
 
-    def __init__(self, device: str, node_input_size: int, cov_gnn_params: dict, spatial_gnn_params: dict,
-                 lin_params: dict, num_task: int, keep_fraction: float = 0.15, max_grad_norm: float = 1.0,
-                 verbose: int = 1, model_name: str = 'IonFlow_I'):
+    def __init__(self, device: str, node_input_size: int, cov_gnn_params: dict, lin_params: dict, num_task: int,
+                 autocast: bool = False, autocast_dtype: torch.dtype = torch.bfloat16,
+                 max_grad_norm: float = 1.0, verbose: int = 1, seed: int | None = 42,
+                 log_config: Dict[str, bool] | None = None, model_name: str = "SingleGNN"):
 
-        super().__init__(device=device, num_task=num_task, model_name=model_name,
-                         max_grad_norm=max_grad_norm, verbose=verbose)
+        """
+        Initialize SingleGNN class
+
+        Parameters
+        ----------
+        device: str
+            Device to use. Default is cpu.
+        node_input_size: int
+            Node encoding size.
+        cov_gnn_params: dict
+            Dictionary of GNN parameters for covalent channel
+        lin_params: dict
+            Dictionary for build_linear_layers
+        num_task: int, optional
+            Number of regression outputs
+        autocast: bool, default=False
+            Flag to enable autocasting of dtypes
+        autocast_dtype: torch.dtype, default=torch.bfloat16
+            DataType to use when autocasting
+        max_grad_norm: float
+            Gradient clipping max norm in fit_epoch. Default is 1.0.
+        verbose: int, optional
+            Set verbosity level. 0 = no logs, 1 = standard progress, 2 = debugging
+        model_name: str, optional
+            Name of the model
+        log_config: Dict[str, bool]
+            Logging configuration, with the following (option | default):
+                * `per_task_loss`: False
+                * `gradient_norm`: True
+        """
+
+        super().__init__(device=device, num_task=num_task, model_name=model_name, autocast=autocast,
+                         autocast_dtype=autocast_dtype, max_grad_norm=max_grad_norm, verbose=verbose,
+                         seed=seed, log_config=log_config)
 
         self.node_input_size = node_input_size
-        self.conv_input_size = cov_gnn_params.get("input_dim")
-        self.keep_fraction = keep_fraction
+        self.cov_input_size = cov_gnn_params["input_dim"]
 
         self.cov_gnn_params = cov_gnn_params
-        self.spatial_gnn_params = spatial_gnn_params
         self.lin_params = dict(lin_params)
 
         self.adaptation_layer = nn.Sequential(
-            nn.Linear(self.node_input_size, self.conv_input_size),
+            nn.Linear(self.node_input_size, self.cov_input_size),
             nn.SiLU()
         )
 
         self.cov_gnn_layer, self.cov_gnn_out_size = build_graph_layers(self.cov_gnn_params)
-        self.spatial_gnn_layer, self.spatial_gnn_out_size = build_graph_layers(self.spatial_gnn_params)
-        self.gnn_out_size = self.spatial_gnn_out_size + self.cov_gnn_out_size
 
-        self.lin_params["sizes"] = [self.gnn_out_size] + self.lin_params.get("sizes")
+        self.lin_params["sizes"] = [self.cov_gnn_out_size] + self.lin_params["sizes"]
         self.lin_layers, self.lin_out_size = build_linear_layers(**self.lin_params)
 
         self.prediction_heads = nn.Linear(self.lin_out_size, self.num_task)
+        self.to(self.device)
 
     def forward(self, batch_data: dict):
         """
@@ -83,23 +88,14 @@ class SpatialGINEConv(MMRegressionUnit):
         x_out: torch.Tensor
             Shape (batch, num_task).
         """
-        graph_batch = batch_data["graph"].to(self.device)
+        graph_batch = batch_data["graph"]
 
         graph_batch.x = self.adaptation_layer(graph_batch.x)
 
-        cov_graph = copy(graph_batch)
-        spatial_graph = copy(graph_batch)
-
         for layer in self.cov_gnn_layer:
-            cov_graph.x = layer(cov_graph)
+            graph_batch.x = layer(graph_batch)
 
-        for layer in self.spatial_gnn_layer:
-            spatial_graph.x = layer(spatial_graph)
-
-        cov_pool = global_add_pool(cov_graph.x, cov_graph.batch)
-        spatial_pool = global_add_pool(spatial_graph.x, spatial_graph.batch)
-
-        x = torch.cat((cov_pool, spatial_pool), dim=-1)
+        x = global_mean_pool(x=graph_batch.x, batch=graph_batch.batch)
 
         for layer in self.lin_layers:
             x = layer(x)
@@ -108,68 +104,227 @@ class SpatialGINEConv(MMRegressionUnit):
 
         return x_out
 
-    def fit_epoch(self, dataloader: Iterable[dict]) -> Tuple[LossSummary, Dict[str, Any], List[float]]:
+
+class DualGNN(MMRegressionUnit):
+    """
+    Dual channel covalent/spatial graph neural network.
+    """
+
+    def __init__(self, device: str, node_input_size: int, cov_gnn_params: dict, spatial_gnn_params: dict,
+                 lin_params: dict, num_task: int, autocast: bool = False, autocast_dtype: torch.dtype = torch.bfloat16,
+                 max_grad_norm: float = 1.0, verbose: int = 1, seed: int | None = 42,
+                 log_config: Dict[str, bool] | None = None, model_name: str = "DualGNN"):
+
         """
-        Overwrite the base method to sample fraction of target values.
+        Initialize DualGNN class
 
         Parameters
         ----------
-        dataloader: iterable
-            Iterable yielding batches.
+        device: str
+            Device to use. Default is cpu.
+        node_input_size: int
+            Node encoding size.
+        cov_gnn_params: dict
+            Dictionary of GNN parameters for covalent channel
+        spatial_gnn_params: dict
+            Dictionary of GNN parameters for spatial channel
+        lin_params: dict
+            Dictionary for build_linear_layers
+        num_task: int, optional
+            Number of regression outputs
+        autocast: bool, default=False
+            Flag to enable autocasting of dtypes
+        autocast_dtype: torch.dtype, default=torch.bfloat16
+            DataType to use when autocasting
+        max_grad_norm: float
+            Gradient clipping max norm in fit_epoch. Default is 1.0.
+        verbose: int, optional
+            Set verbosity level. 0 = no logs, 1 = standard progress, 2 = debugging
+        model_name: str, optional
+            Name of the model
+        log_config: Dict[str, bool]
+            Logging configuration, with the following (option | default):
+                * `per_task_loss`: False
+                * `gradient_norm`: True
+        """
+
+        super().__init__(device=device, num_task=num_task, model_name=model_name, autocast=autocast,
+                         autocast_dtype=autocast_dtype, max_grad_norm=max_grad_norm, verbose=verbose,
+                         seed=seed, log_config=log_config)
+
+        self.node_input_size = node_input_size
+        self.cov_input_size = cov_gnn_params["input_dim"]
+
+        self.cov_gnn_params = cov_gnn_params
+        self.spatial_gnn_params = spatial_gnn_params
+        self.lin_params = dict(lin_params)
+
+        self.adaptation_layer = nn.Sequential(
+            nn.Linear(self.node_input_size, self.cov_input_size),
+            nn.SiLU()
+        )
+
+        self.cov_gnn_layer, self.cov_gnn_out_size = build_graph_layers(self.cov_gnn_params)
+        self.spatial_gnn_layer, self.spatial_gnn_out_size = build_graph_layers(self.spatial_gnn_params)
+        self.gnn_out_size = self.spatial_gnn_out_size + self.cov_gnn_out_size
+
+        self.lin_params["sizes"] = [self.gnn_out_size] + self.lin_params.get("sizes", [])
+        self.lin_layers, self.lin_out_size = build_linear_layers(**self.lin_params)
+
+        self.prediction_heads = nn.Linear(self.lin_out_size, self.num_task)
+        self.to(self.device)
+
+    def forward(self, batch_data: dict):
+        """
+        Parameters
+        ----------
+        batch_data: dict
 
         Returns
         -------
-        tuple
-            Normalised epoch loss, epoch metrics, and per-batch gradient norms.
+        x_out: torch.Tensor
+            Shape (batch, num_task).
         """
-        if self.optimizer is None:
-            raise RuntimeError("An optimizer must be configured before training.")
+        graph_batch = batch_data["graph"]
 
-        self.train()
+        adapted_x = self.adaptation_layer(graph_batch.x)
 
-        batch_losses: List[LossSummary] = []
-        epoch_data = {"y_pred": [], "y_true": [], "y_wgts": []}
-        gradient_norms = []
+        cov_graph = copy(graph_batch)
+        spatial_graph = copy(graph_batch)
 
-        for batch_data in dataloader:
-            self.optimizer.zero_grad()
+        cov_graph.x = adapted_x
+        spatial_graph.x = adapted_x
 
-            y_pred = self(batch_data)
-            y_true = batch_data["y_true"].to(self.device)
-            y_wgts = batch_data["y_wgts"].to(self.device)
+        for layer in self.cov_gnn_layer:
+            cov_graph.x = layer(cov_graph)
 
-            target_mask = torch.rand_like(y_true, dtype=torch.float16) < self.keep_fraction
-            masked_y_wgts = y_wgts * target_mask.to(dtype=y_wgts.dtype)
-            if masked_y_wgts.sum() == 0:
-                continue
+        for layer in self.spatial_gnn_layer:
+            spatial_graph.x = layer(spatial_graph)
 
-            epoch_data["y_pred"].append(y_pred.detach())
-            epoch_data["y_true"].append(y_true.detach())
-            epoch_data["y_wgts"].append(y_wgts.detach())
+        cov_pool = global_mean_pool(x=cov_graph.x, batch=cov_graph.batch)
+        spatial_pool = global_mean_pool(x=spatial_graph.x, batch=spatial_graph.batch)
 
-            batch_loss = self.loss(
-                y_pred=y_pred,
-                y_true=y_true,
-                y_wgts=masked_y_wgts,
-                group=self._get_batch_group(batch_data),
-            )
+        x = torch.cat(tensors=(cov_pool, spatial_pool), dim=-1)
 
-            total_loss, total_weight = batch_loss["Total"]
-            total_loss.backward()
+        for layer in self.lin_layers:
+            x = layer(x)
 
-            gradient_norms.append(self.grad_norm() / (total_weight.item() + 1e-6))
+        x_out = self.prediction_heads(x)
 
-            if self.max_grad_norm is not None:
-                torch.nn.utils.clip_grad_norm_(
-                    self.parameters(),
-                    max_norm=self.max_grad_norm,
-                )
+        return x_out
 
-            self.optimizer.step()
-            batch_losses.append(batch_loss)
 
-        if self.scheduler is not None:
-            self.scheduler.step()
+class AngularGNN(MMRegressionUnit):
+    """
+    Dual channel covalent/spatial graph neural network with added Angle ACSF.
+    """
 
-        epoch_loss, epoch_metrics = self._summarise_epoch(batch_losses, epoch_data)
-        return epoch_loss, epoch_metrics, gradient_norms
+    def __init__(self, device: str, node_input_size: int, abf_input_size: int, cov_gnn_params: dict, spatial_gnn_params: dict,
+                 lin_params: dict, num_task: int, autocast: bool = False, autocast_dtype: torch.dtype = torch.bfloat16,
+                 max_grad_norm: float = 1.0, verbose: int = 1, seed: int | None = 42,
+                 log_config: Dict[str, bool] | None = None, model_name: str = "AngularGNN"):
+
+        """
+        Initialize AngularGNN class
+
+        Parameters
+        ----------
+        device: str
+            Device to use. Default is cpu.
+        node_input_size: int
+            Node encoding size.
+        cov_gnn_params: dict
+            Dictionary of GNN parameters for covalent channel
+        spatial_gnn_params: dict
+            Dictionary of GNN parameters for spatial channel
+        lin_params: dict
+            Dictionary for build_linear_layers
+        num_task: int, optional
+            Number of regression outputs
+        autocast: bool, default=False
+            Flag to enable autocasting of dtypes
+        autocast_dtype: torch.dtype, default=torch.bfloat16
+            DataType to use when autocasting
+        max_grad_norm: float
+            Gradient clipping max norm in fit_epoch. Default is 1.0.
+        verbose: int, optional
+            Set verbosity level. 0 = no logs, 1 = standard progress, 2 = debugging
+        model_name: str, optional
+            Name of the model
+        log_config: Dict[str, bool]
+            Logging configuration, with the following (option | default):
+                * `per_task_loss`: False
+                * `gradient_norm`: True
+        """
+
+        super().__init__(device=device, num_task=num_task, model_name=model_name, autocast=autocast,
+                         autocast_dtype=autocast_dtype, max_grad_norm=max_grad_norm, verbose=verbose,
+                         seed=seed, log_config=log_config)
+
+        self.node_input_size = node_input_size
+        self.abf_input_size = abf_input_size
+        self.spatial_node_input_size = self.node_input_size + self.abf_input_size
+        self.cov_input_size = cov_gnn_params["input_dim"]
+        self.spatial_input_size = spatial_gnn_params["input_dim"]
+
+        self.cov_gnn_params = cov_gnn_params
+        self.spatial_gnn_params = spatial_gnn_params
+        self.lin_params = dict(lin_params)
+
+        self.cov_adaptation_layer = nn.Sequential(
+            nn.Linear(self.node_input_size, self.cov_input_size),
+            nn.SiLU()
+        )
+        self.spatial_adaptation_layer = nn.Sequential(
+            nn.Linear(self.spatial_node_input_size, self.spatial_input_size),
+            nn.SiLU()
+        )
+
+        self.cov_gnn_layer, self.cov_gnn_out_size = build_graph_layers(self.cov_gnn_params)
+        self.spatial_gnn_layer, self.spatial_gnn_out_size = build_graph_layers(self.spatial_gnn_params)
+        self.gnn_out_size = self.spatial_gnn_out_size + self.cov_gnn_out_size
+
+        self.lin_params["sizes"] = [self.gnn_out_size] + self.lin_params.get("sizes", [])
+        self.lin_layers, self.lin_out_size = build_linear_layers(**self.lin_params)
+
+        self.prediction_heads = nn.Linear(self.lin_out_size, self.num_task)
+        self.to(self.device)
+
+    def forward(self, batch_data: dict):
+        """
+        Parameters
+        ----------
+        batch_data: dict
+
+        Returns
+        -------
+        x_out: torch.Tensor
+            Shape (batch, num_task).
+        """
+        graph_batch = batch_data["graph"]
+
+        spatial_x = torch.cat(tensors=(graph_batch["x"], graph_batch["atom_angular_basis"]), dim=-1)
+
+        cov_graph = copy(graph_batch)
+        spatial_graph = copy(graph_batch)
+
+        cov_graph.x = self.cov_adaptation_layer(graph_batch.x)
+        spatial_graph.x = self.spatial_adaptation_layer(spatial_x)
+
+        for layer in self.cov_gnn_layer:
+            cov_graph.x = layer(cov_graph)
+
+        for layer in self.spatial_gnn_layer:
+            spatial_graph.x = layer(spatial_graph)
+
+        cov_pool = global_mean_pool(x=cov_graph.x, batch=cov_graph.batch)
+        spatial_pool = global_mean_pool(x=spatial_graph.x, batch=spatial_graph.batch)
+
+        x = torch.cat(tensors=(cov_pool, spatial_pool), dim=-1)
+
+        for layer in self.lin_layers:
+            x = layer(x)
+
+        x_out = self.prediction_heads(x)
+
+        return x_out
