@@ -128,7 +128,7 @@ def write_graph_lmdb(df: pl.DataFrame, lmdb_path: str | Path, *, target_col: str
             destination.unlink()
     destination.parent.mkdir(parents=True, exist_ok=True)
 
-    resolved_map_size = map_size or max(1 << 30, df.height * 32_768)
+    resolved_map_size = map_size or max(1 << 30, df.height * 256_000)
     env = lmdb.open(
         str(destination),
         map_size=resolved_map_size,
@@ -144,7 +144,7 @@ def write_graph_lmdb(df: pl.DataFrame, lmdb_path: str | Path, *, target_col: str
     written = 0
     target_size: int | None = None
     graph_fields: set[str] = set()
-    rows = df.select(provided_columns).to_dicts()
+    rows = df.select(provided_columns).iter_rows(named=True)
 
     try:
         txn = env.begin(write=True)
