@@ -8,8 +8,8 @@ import os
 from io import BytesIO
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
-import json, pickle
+from collections.abc import Sequence
+import pickle
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Union
@@ -550,7 +550,7 @@ class GraphBatch(dict):
 
 class LMDBGraphDataset(Dataset[dict[str, Any]]):
     """
-    Read-only map-style dataset for records written by `build_graph_lmdb`.
+    Read-only map-style dataset for records written by `write_graph_lmdb`.
     """
 
     def __init__(self, lmdb_path: str | Path, *, validate_schema: bool = True) -> None:
@@ -638,18 +638,16 @@ class LMDBGraphDataset(Dataset[dict[str, Any]]):
         if not isinstance(sample, dict) or not isinstance(sample.get("graph"), Data):
             raise TypeError(f"Malformed sample for record_id={record_id}.")
 
-        sample["y_true"] = torch.as_tensor(sample["y_true"])
+        sample["y_true"] = torch.as_tensor(sample["y_true"], dtype=torch.float32)
         sample["y_wgts"] = torch.as_tensor(sample["y_wgts"], dtype=torch.float32)
         return sample
 
     def close(self) -> None:
-        """Close the current process's LMDB environment."""
         if self._env is not None:
             self._env.close()
             self._env = None
 
     def __getstate__(self) -> dict[str, Any]:
-        """Do not pickle an open LMDB environment into DataLoader workers."""
         state = self.__dict__.copy()
         state["_env"] = None
         return state
