@@ -30,6 +30,7 @@ class GaussianRBF(torch.nn.Module):
     """
     Gaussian radial-basis encoding for paired distances.
     """
+
     def __init__(self, r_cut: float = 6.0, n_rbf: int = 32, eta: float | None = None):
         super().__init__()
 
@@ -66,8 +67,8 @@ class GaussianRBF(torch.nn.Module):
         if distances.ndim != 1:
             raise ValueError(f"Expected distances with shape [E], got {distances.shape} instead.")
 
-        centers = self.centers.to(dtype=distances.dtype)
-        eta = self.eta.to(dtype=distances.dtype)
+        centers = self.centers.to(dtype=distances.dtype, device=distances.device)
+        eta = self.eta.to(dtype=distances.dtype, device=distances.device)
 
         return torch.exp(
             -eta * (distances.unsqueeze(-1) - centers).square()
@@ -114,8 +115,8 @@ class GaussianABF(torch.nn.Module):
         if angles.ndim != 1:
             raise ValueError(f"Expected angles with shape [num_triplets], got {tuple(angles.shape)}.")
 
-        centers = self.centers.to(dtype=angles.dtype)
-        eta = self.eta.to(dtype=angles.dtype)
+        centers = self.centers.to(dtype=angles.dtype, device=angles.device)
+        eta = self.eta.to(dtype=angles.dtype, device=angles.device)
 
         return torch.exp(
             -eta * (angles.unsqueeze(-1) - centers).square()
@@ -133,7 +134,8 @@ class GraphVectorizer:
     """
 
     def __init__(self, atom_encoding: Dict[str, int] | None = None, bond_encoding: Dict[str, int] | None = None,
-                 group_encoding: Dict[int, List[str]] | None = None, suppress: bool = True):
+                 group_encoding: Dict[int, List[str]] | None = None, features_dtype: torch.dtype = torch.bfloat16,
+                 geometry_dtype: torch.dtype = torch.float32, suppress: bool = True):
         """
         Initialize the graph vectorizer with atom and bond encoding schemes.
 
@@ -145,6 +147,10 @@ class GraphVectorizer:
             Mapping of bond-type names to integer encoding indices. If `None`, the default bond encoding is used.
         group_encoding: Dict[int, List[str]] | None
             Mapping of groups to Lists of atom symbols. If `None`, the default group encoding is used.
+        features_dtype: torch.dtype
+            Data type for graph features. Default is torch.bfloat16
+        geometry_dtype: torch.dtype
+            Data type for storing molecular geometry. Default is torch.float32
         suppress: bool
             Whether to suppress RDKit log messages.
         """
@@ -200,6 +206,9 @@ class GraphVectorizer:
         self.unk_group_idx = len(self.groups)
         self.unk_bond_idx = len(self.bond_encoding)
 
+        self.features_dtype = features_dtype
+        self.geometry_dtype = geometry_dtype
+
         self.gaussian_rbf: GaussianRBF | None = None
         self.gaussian_abf: GaussianABF | None = None
         self._rbf_args: Dict[str, float | int] | None = None
@@ -218,15 +227,22 @@ class GraphVectorizer:
         smiles: List[str]
             List of valid SMILES strings
         """
-        atom_encoding = set()
-        for smi in smiles:
-            if (mol := Chem.MolFromSmiles(smi)) is None:
-                continue
-            atom_set = set([(atom.GetSymbol(), atom.GetAtomicNum()) for atom in mol.GetAtoms()])
-            atom_encoding.update(atom_set)
+        elements = set()
 
-        atom_encoding = dict(sorted(list(atom_encoding), key=lambda x: x[1]))
-        return atom_encoding
+        for smi in smiles:
+            mol = Chem.MolFromSmiles(smi)
+            if mol is not None:
+                elements.update(
+                    (atom.GetSymbol(), atom.GetAtomicNum())
+                    for atom in mol.GetAtoms()
+                )
+
+        return {
+            symbol: index
+            for index, (symbol, _) in enumerate(
+                sorted(elements, key=lambda item: item[1])
+            )
+        }
 
     def encode_atom(self, atom: Chem.rdchem.Atom, partial_charge: float = 0.0) -> npt.NDArray:
         """
@@ -412,9 +428,9 @@ class GraphVectorizer:
         edges_array, bonds_encoding_array = self.encode_mol_bonds(mol, heavy_only=heavy_only)
 
         graph_data = {
-            "x": torch.from_numpy(atoms_encoding_array),
-            "edge_index": torch.from_numpy(edges_array),
-            "edge_attr": torch.from_numpy(bonds_encoding_array),
+            "x": torch.from_numpy(atoms_encoding_array).to(dtype=self.features_dtype),
+            "edge_index": torch.from_numpy(edges_array).to(dtype=torch.long),
+            "edge_attr": torch.from_numpy(bonds_encoding_array).to(dtype=self.features_dtype),
         }
 
         return Data(**graph_data)
@@ -448,7 +464,7 @@ class GraphVectorizer:
         conf_id, _ = molecule.get_lowest_energy_conformer(method=energy_method)
 
         charges = molecule.get_charges(method=charge_method, conf_id=conf_id, heavy_only=heavy_only,
-                                      combine_hydrogens=combine_hydrogens)
+                                       combine_hydrogens=combine_hydrogens)
 
         positions = molecule.get_conformer_positions(conf_id=conf_id, heavy_only=heavy_only)
 
@@ -458,13 +474,13 @@ class GraphVectorizer:
                                                                   heavy_only=heavy_only)
 
         graph_data = {
-            "x": torch.from_numpy(atoms_encoding_array),
-            "edge_index": torch.from_numpy(edges_array),
-            "edge_attr": torch.from_numpy(bonds_encoding_array),
+            "x": torch.from_numpy(atoms_encoding_array).to(dtype=self.features_dtype),
+            "edge_index": torch.from_numpy(edges_array).to(dtype=torch.long),
+            "edge_attr": torch.from_numpy(bonds_encoding_array).to(dtype=self.features_dtype),
         }
 
         if include_pos:
-            graph_data["pos"] = torch.from_numpy(positions).to(torch.float32)
+            graph_data["pos"] = torch.from_numpy(positions).to(dtype=self.geometry_dtype)
 
         return Data(**graph_data)
 
@@ -731,6 +747,8 @@ class GraphVectorizer:
                 Float tensor with shape [num_nodes, n_rbf].
         """
         pos = self._validate_graph_positions(graph)
+        if pos.dtype != self.geometry_dtype:
+            pos = pos.to(dtype=self.geometry_dtype)
 
         if r_cut <= 0:
             raise ValueError("< r_cut > must be a positive float.")
@@ -742,7 +760,6 @@ class GraphVectorizer:
             raise ValueError("< max_neighbors > must be at least 1.")
 
         n_nodes = pos.shape[0]
-        dtype = pos.dtype
 
         self.set_rbf(r_cut=r_cut, n_rbf=n_rbf)
         assert self.gaussian_rbf is not None
@@ -759,7 +776,8 @@ class GraphVectorizer:
         graph.atom_radial_basis = pos.new_zeros((n_nodes, n_rbf))
 
         if edge_index.numel() == 0:
-            graph.spatial_edge_attr = pos.new_zeros((0, n_rbf))
+            graph.spatial_edge_attr = pos.new_zeros((0, n_rbf), dtype=self.features_dtype)
+            graph.atom_radial_basis = graph.atom_radial_basis.to(dtype=self.features_dtype)
             return graph
 
         source, target = edge_index
@@ -767,7 +785,7 @@ class GraphVectorizer:
         edge_vec = pos[source] - pos[target]
         edge_dist = torch.linalg.vector_norm(edge_vec, dim=-1)
 
-        eps = torch.finfo(dtype).eps
+        eps = torch.finfo(pos.geometry_dtype).eps
 
         if torch.any(edge_dist <= eps):
             raise ValueError("Spatial graph contains coincident atoms or near-zero interatomic distances.")
@@ -775,9 +793,10 @@ class GraphVectorizer:
         radial_weights = self._cosine_smooth(distances=edge_dist, r_cut=r_cut)
 
         edge_radial_basis = self.gaussian_rbf(edge_dist) * radial_weights.unsqueeze(-1)
-        graph.spatial_edge_attr = edge_radial_basis
+        graph.spatial_edge_attr = edge_radial_basis.to(self.features_dtype)
 
         graph.atom_radial_basis.index_add_(0, target, edge_radial_basis)
+        graph.atom_radial_basis = graph.atom_radial_basis.to(dtype=self.features_dtype)
 
         return graph
 
@@ -822,7 +841,6 @@ class GraphVectorizer:
                              f" got {tuple(edge_index.shape)}.")
 
         n_nodes = pos.shape[0]
-        dtype = pos.dtype
 
         self.set_abf(n_abf=n_abf)
         assert self.gaussian_abf is not None
@@ -830,8 +848,9 @@ class GraphVectorizer:
         graph.atom_angular_basis = pos.new_zeros((n_nodes, n_abf))
 
         if edge_index.numel() == 0:
+            graph.atom_angular_basis = graph.atom_angular_basis.to(dtype=self.features_dtype)
             graph.spatial_angle_index = torch.empty((3, 0), dtype=torch.long)
-            graph.spatial_angle_attr = pos.new_zeros((0, n_abf))
+            graph.spatial_angle_attr = pos.new_zeros((0, n_abf), dtype=self.features_dtype)
             return graph
 
         source, target = edge_index
@@ -839,7 +858,7 @@ class GraphVectorizer:
         edge_vec = pos[source] - pos[target]
         edge_dist = torch.linalg.vector_norm(edge_vec, dim=-1)
 
-        eps = torch.finfo(dtype).eps
+        eps = torch.finfo(self.geometry_dtype).eps
 
         if torch.any(edge_dist <= eps):
             raise ValueError("Spatial graph contains coincident atoms or near-zero interatomic distances.")
@@ -847,8 +866,9 @@ class GraphVectorizer:
         edge_ij_idx, edge_ik_idx = self._build_angles(edge_index=edge_index, n_nodes=n_nodes)
 
         if edge_ij_idx.numel() == 0:
-            graph.spatial_angle_index = torch.empty((3, 0), dtype=torch.long)
-            graph.spatial_angle_attr = pos.new_zeros((0, n_abf))
+            graph.atom_angular_basis = graph.atom_angular_basis.to(dtype=self.features_dtype)
+            graph.spatial_angle_index = torch.empty(size=(3, 0), dtype=torch.long)
+            graph.spatial_angle_attr = pos.new_zeros(size=(0, n_abf), dtype=self.features_dtype)
             return graph
 
         edge_vec_ij = edge_vec[edge_ij_idx]
@@ -866,7 +886,7 @@ class GraphVectorizer:
 
         radial_weights = self._cosine_smooth(distances=edge_dist, r_cut=r_cut)
 
-        angular_weights = (radial_weights[edge_ij_idx] * radial_weights[edge_ik_idx])
+        angular_weights = radial_weights[edge_ij_idx] * radial_weights[edge_ik_idx]
 
         triplet_angular_basis = self.gaussian_abf(angles) * angular_weights.unsqueeze(-1)
 
@@ -875,8 +895,9 @@ class GraphVectorizer:
             dim=0,
         )
 
-        graph.spatial_angle_attr = triplet_angular_basis
+        graph.spatial_angle_attr = triplet_angular_basis.to(dtype=self.features_dtype)
         graph.atom_angular_basis.index_add_(0, target[edge_ij_idx], triplet_angular_basis)
+        graph.atom_angular_basis = graph.atom_angular_basis.to(dtype=self.features_dtype)
 
         return graph
 
