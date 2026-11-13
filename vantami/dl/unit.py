@@ -1,12 +1,12 @@
 import os
-from pathlib import Path
-import warnings
 import inspect
 import datetime
-from abc import ABC, abstractmethod
-from collections import defaultdict
+import warnings
+from pathlib import Path
 from copy import deepcopy
 from functools import reduce
+from collections import defaultdict
+from abc import ABC, abstractmethod
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
@@ -30,33 +30,66 @@ class MMUnit(nn.Module, ABC):
     """
     Abstract base class for multitask deep-learning models.
 
-    The class provides reusable training, evaluation, checkpointing, masked
-    weighted-loss, and metric-aggregation functionality. Subclasses must
-    implement :meth:`forward` and :meth:`score`.
-
-    Parameters
-    ----------
-    device: str, default="cpu"
-        Device on which model calculations are performed.
-    num_task: int, default=1
-        Number of prediction tasks.
-    model_name: str, default="Unit"
-        Model identifier used in checkpoint filenames.
-    max_grad_norm: float, optional
-        Maximum gradient norm used for gradient clipping. Gradient clipping is disabled when this is `None`.
-    verbose: int, optional
-        Set verbosity level. 0 = no logs, 1 = standard progress, 2 = debugging
+    The class provides reusable training, evaluation, checkpointing, masked weighted-loss,
+    and metric-aggregation functionality.
     """
 
-    def __init__(self, device: str = "cpu", num_task: int = 1, model_name: str = "Unit",
-                 max_grad_norm: Optional[float] = None, verbose: int = 1, seed: int | None = 42) -> None:
+    def __init__(self, device: str = "cpu", num_task: int = 1, model_name: str = "Unit", autocast: bool = False,
+                 autocast_dtype: torch.dtype = torch.bfloat16, max_grad_norm: float | None = None, verbose: int = 1,
+                 seed: int | None = 42, log_config: Dict[str, bool] | None = None) -> None:
+        """
+        Initialize the MMUnit.
+
+        Parameters
+        ----------
+        device: str, default="cpu"
+            Device on which model calculations are performed.
+        num_task: int, default=1
+            Number of prediction tasks.
+        model_name: str, default="Unit"
+            Model identifier used in checkpoint filenames.
+        autocast: bool, default=False
+            Flag to enable autocasting of dtypes
+        autocast_dtype: torch.dtype, default=torch.bfloat16
+            DataType to use when autocasting
+        max_grad_norm: float, optional
+            Maximum gradient norm used for gradient clipping. Gradient clipping is disabled when this is `None`.
+        verbose: int, optional
+            Set verbosity level. 0 = no logs, 1 = standard progress, 2 = debugging
+        log_config: Dict[str, bool]
+            Logging configuration, with the following (option | default):
+                * `per_task_loss`: False
+                * `gradient_norm`: True
+        """
         super().__init__()
 
-        self.device = device
+        self.device = torch.device(device)
         self.num_task = num_task
         self.model_name = model_name
+
+        if autocast and autocast_dtype not in {torch.bfloat16, torch.float16}:
+            raise ValueError("< autocast_dtype > must be torch.bfloat16 or torch.float16")
+
+        if autocast and self.device.type not in {"cuda", "cpu"}:
+            raise ValueError(f"Autocast is unsupported for device type {self.device.type!r}.")
+
+        self.autocast = autocast
+        self.autocast_dtype = autocast_dtype
         self.max_grad_norm = max_grad_norm
         self.verbose = verbose
+
+        default_log_config = {
+            "per_task_loss": False,
+            "gradient_norm": True,
+        }
+
+        self.log_config = {
+            **default_log_config,
+            **(log_config or {}),
+        }
+
+        if seed is not None:
+            self.set_seed(seed)
 
         self.loss_fn: Optional[nn.Module] = None
         self.optimizer: Optional[torch.optim.Optimizer] = None
@@ -65,13 +98,12 @@ class MMUnit(nn.Module, ABC):
         self.logs = defaultdict(list)
         self.epoch = 1
         self.best_state_dict: Optional[Dict[str, Tensor]] = None
+        self.best_epoch: int | None = None
         self.best_fit_loss: float | None = None
         self.best_val_loss: float | None = None
         self.hyperparameters: Dict[str, Any] = {}
         self.numpy_rng_state = None
         self.torch_rng_state = None
-        if seed is not None:
-            self.set_seed(seed)
 
     def log(self, message: str, level: int = 1):
         if self.verbose >= level:
@@ -111,7 +143,7 @@ class MMUnit(nn.Module, ABC):
 
         Returns
         -------
-        dict
+        Dict[str, float | np.nan]
         """
 
     @abstractmethod
@@ -148,9 +180,16 @@ class MMUnit(nn.Module, ABC):
 
     def _batch_to_device(self, batch_data: dict) -> dict:
         return {
-            key: value.to(self.device) if isinstance(value, Tensor) else value
+            key: value.to(self.device, non_blocking=True) if hasattr(value, "to") else value
             for key, value in batch_data.items()
         }
+
+    def _autocast_context(self):
+        return torch.autocast(
+            device_type=self.device.type,
+            dtype=self.autocast_dtype,
+            enabled=self.autocast
+        )
 
     @staticmethod
     def _normalise_group_tags(group_values: Iterable[Any]) -> List[set[str]]:
@@ -193,8 +232,8 @@ class MMUnit(nn.Module, ABC):
     @staticmethod
     def _detach_loss_summary(loss_summary: LossSummary) -> LossSummary:
         detached = {
-            "Total": tuple(value.detach() for value in loss_summary["Total"]),
-            "Task": tuple(value.detach() for value in loss_summary["Task"]),
+            "Total": tuple(value.detach().cpu() for value in loss_summary["Total"]),
+            "Task": tuple(value.detach().cpu() for value in loss_summary["Task"]),
         }
 
         if "Group" in loss_summary:
@@ -222,9 +261,7 @@ class MMUnit(nn.Module, ABC):
 
         if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
             if metric is None:
-                raise ValueError(
-                    "ReduceLROnPlateau requires a monitored metric."
-                )
+                raise ValueError("ReduceLROnPlateau requires a monitored metric.")
             self.scheduler.step(metric)
         else:
             self.scheduler.step()
@@ -249,7 +286,7 @@ class MMUnit(nn.Module, ABC):
         self.train()
 
         batch_losses: List[LossSummary] = []
-        epoch_data = {"y_pred": [], "y_true": [], "y_wgts": []}
+        epoch_data = defaultdict(list)
         gradient_norms = []
 
         for batch_index, batch_data in enumerate(dataloader, start=1):
@@ -257,7 +294,9 @@ class MMUnit(nn.Module, ABC):
             self.optimizer.zero_grad()
             batch_data = self._batch_to_device(batch_data)
 
-            y_pred = self(batch_data)
+            with self._autocast_context():
+
+                y_pred = self(batch_data)
             y_true = batch_data["y_true"]
             y_wgts = batch_data["y_wgts"]
 
@@ -269,9 +308,9 @@ class MMUnit(nn.Module, ABC):
                 continue
 
             batch_loss = self.loss(
-                y_pred=y_pred,
-                y_true=y_true,
-                y_wgts=y_wgts,
+                y_pred=y_pred.float(),
+                y_true=y_true.float(),
+                y_wgts=y_wgts.float(),
                 group=self._get_batch_group(batch_data),
             )
 
@@ -281,9 +320,9 @@ class MMUnit(nn.Module, ABC):
                 self.log(f"Training batch {batch_index} has no valid targets; skipping", level=1)
                 continue
 
-            epoch_data["y_pred"].append(y_pred.detach())
-            epoch_data["y_true"].append(y_true.detach())
-            epoch_data["y_wgts"].append(y_wgts.detach())
+            epoch_data["y_pred"].append(y_pred.detach().float().cpu())
+            epoch_data["y_true"].append(y_true.detach().float().cpu())
+            epoch_data["y_wgts"].append(y_wgts.detach().float().cpu())
 
             loss_value = total_loss / total_weight.clamp_min(
                 torch.finfo(total_weight.dtype).eps
@@ -292,7 +331,8 @@ class MMUnit(nn.Module, ABC):
 
             gradient_norm = self.grad_norm()
 
-            gradient_norms.append(gradient_norm)
+            if self.log_config["gradient_norm"]:
+                gradient_norms.append(gradient_norm)
 
             self.log(f"Training batch {batch_index}: loss sum={total_loss.item():.5f}, "
                      f"weight sum={total_weight.item():.5f}, gradient norm={gradient_norm:.5f}.", level=2)
@@ -304,6 +344,7 @@ class MMUnit(nn.Module, ABC):
                 )
 
             self.optimizer.step()
+
             batch_losses.append(self._detach_loss_summary(batch_loss))
 
         epoch_loss, epoch_metrics = self._summarise_epoch(batch_losses, epoch_data)
@@ -321,7 +362,9 @@ class MMUnit(nn.Module, ABC):
         with torch.no_grad():
             for batch_index, batch_data in enumerate(dataloader, start=1):
                 batch_data = self._batch_to_device(batch_data)
-                y_pred = self(batch_data)
+
+                with self._autocast_context():
+                    y_pred = self(batch_data)
                 y_true = batch_data["y_true"]
                 y_wgts = batch_data["y_wgts"]
 
@@ -333,9 +376,9 @@ class MMUnit(nn.Module, ABC):
                     continue
 
                 batch_loss = self.loss(
-                    y_pred=y_pred,
-                    y_true=y_true,
-                    y_wgts=y_wgts,
+                    y_pred=y_pred.float(),
+                    y_true=y_true.float(),
+                    y_wgts=y_wgts.float(),
                     group=self._get_batch_group(batch_data),
                 )
 
@@ -345,14 +388,14 @@ class MMUnit(nn.Module, ABC):
                     self.log(f"Training batch {batch_index} has no valid targets; skipping", level=1)
                     continue
 
-                epoch_data["y_pred"].append(y_pred)
-                epoch_data["y_true"].append(y_true)
-                epoch_data["y_wgts"].append(y_wgts)
+                epoch_data["y_pred"].append(y_pred.detach().float().cpu())
+                epoch_data["y_true"].append(y_true.detach().float().cpu())
+                epoch_data["y_wgts"].append(y_wgts.detach().float().cpu())
 
                 self.log(f"Evaluation batch {batch_index}: loss sum={total_loss.item():.5f}, "
                          f"weight sum={total_weight.item():.5f}.", level=2)
 
-                batch_losses.append(batch_loss)
+                batch_losses.append(self._detach_loss_summary(batch_loss))
 
         return self._summarise_epoch(batch_losses, epoch_data)
 
@@ -520,7 +563,9 @@ class MMUnit(nn.Module, ABC):
         with torch.no_grad():
             for batch_data in dataloader:
                 batch_data = self._batch_to_device(batch_data)
-                predictions.append(self(batch_data))
+                with self._autocast_context():
+                    y_pred = self(batch_data)
+                predictions.append(y_pred.to(dtype=torch.float32))
 
         if not predictions:
             raise ValueError("The dataloader produced no batches.")
@@ -531,9 +576,8 @@ class MMUnit(nn.Module, ABC):
         """
         Calculate a masked and weighted element-wise loss.
 
-        Missing targets are identified by `NaN` values and excluded from all
-        loss calculations. Group losses are optionally calculated for every
-        group tag assigned to one or more rows in the batch.
+        Missing targets are identified by `NaN` values and excluded from all loss calculations.
+        Group losses are optionally calculated for every group tag assigned to one or more rows in the batch.
 
         Parameters
         ----------
@@ -800,7 +844,7 @@ class MMUnit(nn.Module, ABC):
             "epoch": self.epoch,
             "best_epoch": self.best_epoch,
             "best_state_dict": self.best_state_dict,
-            "best_train_loss": self.best_train_loss,
+            "best_fit_loss": self.best_fit_loss,
             "best_val_loss": self.best_val_loss,
             "logs": dict(self.logs),
             "numpy_rng_state": np.random.get_state(),
@@ -836,7 +880,7 @@ class MMUnit(nn.Module, ABC):
         self.epoch = checkpoint["epoch"]
         self.best_epoch = checkpoint["best_epoch"]
         self.best_state_dict = checkpoint["best_state_dict"]
-        self.best_train_loss = checkpoint.get("best_train_loss", None)
+        self.best_fit_loss = checkpoint.get("best_fit_loss", None)
         self.best_val_loss = checkpoint.get("best_val_loss", None)
         self.logs = defaultdict(list, checkpoint.get("logs", {}))
 
@@ -866,29 +910,41 @@ class MMUnit(nn.Module, ABC):
 
 class MMClassificationUnit(MMUnit):
     """
-    Abstract base class for binary classification multitask deep-learning models.
-
-    The class provides reusable training, evaluation, checkpointing, masked weighted-loss,
-    and metric-aggregation functionality. Subclasses must implement :meth:`forward`.
-
-    Parameters
-    ----------
-    device: str, default="cpu"
-        Device on which model calculations are performed.
-    num_task: int, default=1
-        Number of prediction tasks.
-    model_name: str, default="Unit"
-        Model identifier used in checkpoint filenames.
-    max_grad_norm: float, optional
-        Maximum gradient norm used for gradient clipping. Gradient clipping is disabled when this is `None`.
-    verbose: int, optional
-        Set verbosity level. 0 = no logs, 1 = standard progress, 2 = debugging
+    Class for binary classification multitask deep-learning models.
     """
 
-    def __init__(self, device: str = "cpu", num_task: int = 1, model_name: str = "ClassificationUnit",
-                 max_grad_norm: Optional[float] = None, verbose: int = 1) -> None:
-        super().__init__(device=device, num_task=num_task, model_name=model_name, max_grad_norm=max_grad_norm,
-                         verbose=verbose)
+    def __init__(self, device: str = "cpu", num_task: int = 1, model_name: str = "ClassUnit", autocast: bool = False,
+                 autocast_dtype: torch.dtype = torch.bfloat16, max_grad_norm: float | None = None, verbose: int = 1,
+                 seed: int | None = 42, log_config: Dict[str, bool] | None = None) -> None:
+
+        """
+        Initialize the MMClassificationUnit.
+
+        Parameters
+        ----------
+        device: str, default="cpu"
+            Device on which model calculations are performed.
+        num_task: int, default=1
+            Number of prediction tasks.
+        model_name: str, default="Unit"
+            Model identifier used in checkpoint filenames.
+        autocast: bool, default=False
+            Flag to enable autocasting of dtypes
+        autocast_dtype: torch.dtype, default=torch.bfloat16
+            DataType to use when autocasting
+        max_grad_norm: float, optional
+            Maximum gradient norm used for gradient clipping. Gradient clipping is disabled when this is `None`.
+        verbose: int, optional
+            Set verbosity level. 0 = no logs, 1 = standard progress, 2 = debugging
+        log_config: Dict[str, bool]
+            Logging configuration, with the following (option | default):
+                * `per_task_loss`: False
+                * `gradient_norm`: True
+        """
+
+        super().__init__(device=device, num_task=num_task, model_name=model_name, autocast=autocast,
+                         autocast_dtype=autocast_dtype, max_grad_norm=max_grad_norm, verbose=verbose,
+                         seed=seed, log_config=log_config)
 
     @abstractmethod
     def forward(self, batch_data: dict) -> Tensor:
@@ -1010,29 +1066,40 @@ class MMClassificationUnit(MMUnit):
 
 class MMRegressionUnit(MMUnit):
     """
-    Abstract base class for regression multitask deep-learning models.
-
-    The class provides reusable training, evaluation, checkpointing, masked weighted-loss,
-    and metric-aggregation functionality. Subclasses must implement :meth:`forward`.
-
-    Parameters
-    ----------
-    device: str, default="cpu"
-        Device on which model calculations are performed.
-    num_task: int, default=1
-        Number of prediction tasks.
-    model_name: str, default="Unit"
-        Model identifier used in checkpoint filenames.
-    max_grad_norm: float, optional
-        Maximum gradient norm used for gradient clipping. Gradient clipping is disabled when this is `None`.
-    verbose: int, optional
-        Set verbosity level. 0 = no logs, 1 = standard progress, 2 = debugging
+    Class for regression multitask deep-learning models.
     """
 
-    def __init__(self, device: str = "cpu", num_task: int = 1, model_name: str = "RegressionUnit",
-                 max_grad_norm: Optional[float] = None, verbose: int = 1) -> None:
-        super().__init__(device=device, num_task=num_task, model_name=model_name, max_grad_norm=max_grad_norm,
-                         verbose=verbose)
+    def __init__(self, device: str = "cpu", num_task: int = 1, model_name: str = "ClassReg", autocast: bool = False,
+                 autocast_dtype: torch.dtype = torch.bfloat16, max_grad_norm: float | None = None, verbose: int = 1,
+                 seed: int | None = 42, log_config: Dict[str, bool] | None = None) -> None:
+        """
+        Initialize the MMRegressionUnit.
+
+        Parameters
+        ----------
+        device: str, default="cpu"
+            Device on which model calculations are performed.
+        num_task: int, default=1
+            Number of prediction tasks.
+        model_name: str, default="Unit"
+            Model identifier used in checkpoint filenames.
+        autocast: bool, default=False
+            Flag to enable autocasting of dtypes
+        autocast_dtype: torch.dtype, default=torch.bfloat16
+            DataType to use when autocasting
+        max_grad_norm: float, optional
+            Maximum gradient norm used for gradient clipping. Gradient clipping is disabled when this is `None`.
+        verbose: int, optional
+            Set verbosity level. 0 = no logs, 1 = standard progress, 2 = debugging
+        log_config: Dict[str, bool]
+            Logging configuration, with the following (option | default):
+                * `per_task_loss`: False
+                * `gradient_norm`: True
+        """
+
+        super().__init__(device=device, num_task=num_task, model_name=model_name, autocast=autocast,
+                         autocast_dtype=autocast_dtype, max_grad_norm=max_grad_norm, verbose=verbose,
+                         seed=seed, log_config=log_config)
 
     @abstractmethod
     def forward(self, batch_data: dict) -> Tensor:
