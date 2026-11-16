@@ -1493,7 +1493,7 @@ def mol_2_mordred(mol: Chem.Mol | Iterable[Chem.Mol]):
     [3] Implementation: https://github.com/JacksonBurns/mordred-community
     """
     try:
-        from numpy import ComplexWarning
+        from numpy.exceptions import ComplexWarning
         from mordred import Calculator, descriptors
     except ImportError as exc:
         raise ImportError(f"Function < mol_2_mordred > requires < mordredcommunity, networkx > libraries:\n{exc}")
@@ -1558,7 +1558,7 @@ def dataframe_2_mordred(df: pl.DataFrame, smiles_col: str = "SMILES", mol_col: s
             delayed(smiles_2_mordred)(smiles=smi) for smi in smiles_batches
         )
     else:
-        warnings.warn("Imaginary parts of returned complex values are discarded.", UserWarning)
+        warnings.warn("Imaginary parts of returned complex values are discarded.", UserWarning, stacklevel=2)
         source = df.select([smiles_col, mol_col]).drop_nulls()
         smiles = source[smiles_col].to_list()
 

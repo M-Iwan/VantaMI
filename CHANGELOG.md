@@ -1,4 +1,4 @@
-# [0.6.0]: 12-11-2026
+# [0.6.0]: 16-11-2026
 
 [Added]
 
@@ -10,7 +10,8 @@
 - Parallel string tokenization for StringVectorizer
 - Spatial encoding for GraphVectorizer
 - Support for Mixed Precision training for MMUnit and derived classes
-- DL models
+- DL model architectures
+- Bugs (but most of them should have been addressed in rc1-7!)
 
 [Updated]
 
