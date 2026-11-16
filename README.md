@@ -1,111 +1,133 @@
 ![](files/Vantami.png)
 
 ### What is this repository?
-A collection of ML/AI code for chemistry applications developed during my PhD.
 
-If you find the repo or its parts useful, it can be installed using:
+Vantami is a collection of ML and AI tools for chemistry applications, developed during my PhD. It includes code for
+molecular representation, descriptor calculation, data processing, machine-learning workflows, deep learning,
+statistics, and visualization.
+
+The repository is still actively evolving. Some parts are relatively stable and reusable, while others are experimental,
+project-specific, or retained for backwards compatibility.
+
+### Installation
+
+The base package can be installed from PyPI:
 
 `pip install vantami`
 
-Full install:
+For an installation including (the most important) optional dependencies:
 
 `pip install "vantami[full]"`
 
-The usual versioning conventions are followed loosely, with minor version bumps usually corresponding to a substantial
-update to a specific module.
+### Versioning
+Current version: 0.6.0rc6
+
+Versioning follows standard conventions where practical. Minor releases usually reflect larger updates to a particular
+module or group of related features.
 
 ### Repository Structure
 
-Current version: 0.6.0rc5
-
 ```
 vantami/
-├── deprecated/                    Old code
-├── dev/                           New stuff / helper files
+├── deprecated/                    Older code kept for reference
+├── dev/                           Development utilities and experimental code
 ├── dist/                          PyPI distribution files
-├── environments/                  Environments for special-needs code (CDDD) 
+├── environments/                  Environments for specialised workflows (e.g. CDDD)
 ├── vantami/
 │   ├── api/
-│   │   ├── convert.py             Conversion from IUPAC names to SMILES using OPSIN
-│   │   └── resolve.py             Get SMILES from name using PubChem, CIR, or (WIP) CAS
+│   │   ├── convert.py             IUPAC-to-SMILES conversion using OPSIN
+│   │   └── resolve.py             Name-to-SMILES resolution via PubChem, CIR, and experimental CAS support
 │   ├── chemistry/
-│   │   ├── manager.py             Dedicated class for managing conformer searches
-│   │   └── molecule.py            Conformer generation and optimization + docking / PLIF
+│   │   ├── manager.py             Tools for managing conformer searches
+│   │   └── molecule.py            Conformer generation, optimisation, docking, and PLIF utilities
 │   ├── cli/
 │   │   ├── CDDD.py                CLI wrapper for CDDD descriptors
-│   │   ├── CIR.py                 CLI wrapper of CIR name resolver
-│   │   ├── Dock.py                Wrapper for molecule.py
-│   │   ├── MolStandardizer.py     Molecule standardization using RDKit
+│   │   ├── CIR.py                 CLI wrapper for the CIR name resolver
+│   │   ├── Dock.py                CLI wrapper for molecular docking workflows
+│   │   ├── MolStandardizer.py     Molecular standardisation using RDKit
 │   │   ├── Mordred.py             CLI wrapper for Mordred descriptors
-│   │   └── OptunaOptimization.py  Old code for Optuna optimization.
+│   │   └── OptunaOptimization.py  Older Optuna optimisation code
 │   ├── data/
-│   │   ├── cluster.py             Clustering using Butina/Murcko/Connected Components algorithms
-│   │   ├── descriptors.py         Descriptor calculations: ECFP, MACCS, Klek, CDDD, RDKit, Mordred, ChemBERTa, MAPC
-│   │   ├── distance.py            Parallel distance matrix / k-neighbors / group k-neighbors calculations
-│   │   ├── embed.py               Feature embedding using PCA, t-SNE, and UMAP
-│   │   ├── filter.py              Filter outliers based on molecular parameters
-│   │   ├── manager.py             Main class for managing data during training and inference
-│   │   ├── partition.py           Partitioning algoriths; convenience wrappers around scikit-learn and cluster.py
-│   │   └── transform.py           Main class for normalizing/processing data before training
+│   │   ├── cluster.py             Wrappers around many scikit-learn-based clustering methods
+│   │   ├── descriptors.py         ECFP, MACCS, RDKit, Mordred, CDDD, ChemBERTa, MAPC, and other descriptors
+│   │   ├── distance.py            Parallel distance-matrix and nearest-neighbour calculations
+│   │   ├── embed.py               PCA, t-SNE, and UMAP embeddings
+│   │   ├── filter.py              Outlier filtering based on molecular properties
+│   │   ├── manager.py             Data management for training and inference
+│   │   ├── partition.py           Dataset partitioning and scikit-learn convenience wrappers
+│   │   └── transform.py           Data normalisation and preprocessing
 │   ├── dl/
-│   │   ├── dataset.py             Polars/Zarr-backend MMDatasets
-│   │   ├── loader.py              MMLoader for datasets
-│   │   ├── models.py              Implementations based on MMUnit class
-│   │   ├── modules.py             GNN/CNN/RNN/linear builders used by units
-│   │   ├── storage.py             Function for saving polars dfs to Zarr format
-│   │   ├── utils.py               Parent MMUnit class
-│   │   ├── utils.py               Activations and small helpers
-│   │   └── vectorizer/            Vectorizers
+│   │   ├── dataset.py             Polars- and LMDB-backed multimodal datasets
+│   │   ├── loader.py              Data loaders for multimodal datasets
+│   │   ├── models.py              Models based on the MMUnit class
+│   │   ├── modules.py             GNN, CNN, RNN, and linear-network building blocks
+│   │   ├── storage.py             Utilities for storing Polars DataFrames in LMDB format
+│   │   ├── utils.py               MMUnit base functionality and smaller helpers
+│   │   └── vectorizer/
 │   │       ├── graph.py           GraphVectorizer
 │   │       └── string.py          StringVectorizer
 │   ├── io/
-│   │   ├── database.py            Preprocessing of ChEMBL and BindingDB files (largely useless)
-│   │   └── file.py                IO functions for several formats I'm using; works with Pandas/Polars DFs
+│   │   ├── database.py            Preprocessing tools for ChEMBL and BindingDB files
+│   │   └── file.py                Input/output utilities for several formats and Pandas/Polars DataFrames
 │   ├── metrics/
 │   │   └── modellability.py       MODI index
 │   ├── ml/
-│   │   ├── augood.py              AU-GOOD framework for model's performance evaluation
-│   │   ├── evaluate.py            Code for simple unit/ensemble evaluations
-│   │   ├── models.py              Self-contained, sklearn-compatibile models and ensembles
-│   │   ├── optimize.py            Hyperparameter optimization
-│   │   ├── params.py              Pre-defined parameters for Optuna
+│   │   ├── augood.py              AU-GOOD framework for model-performance evaluation
+│   │   ├── evaluate.py            Utilities for evaluating models and ensembles
+│   │   ├── models.py              Scikit-learn-compatible models and ensembles
+│   │   ├── optimize.py            Hyperparameter optimisation
+│   │   ├── params.py              Predefined Optuna parameter spaces
 │   │   ├── score.py               Additional performance metrics
-│   │   ├── select.py              Sequential feature selection; Outdated
-│   │   └── utils.p                Helper functions for building Units from just names of models and descriptors
-│   ├── nlp/  
-│   │   ├── article.py             Article class for retrieving metadata based on DOI/Names
-│   │   ├── cluster.py             Latent Dirichlet Allocation for abstract-based clustering
+│   │   ├── select.py              Older sequential feature-selection code
+│   │   └── utils.py               Helpers for building units from model and descriptor names
+│   ├── nlp/
+│   │   ├── article.py             Metadata retrieval from DOIs and article names
+│   │   ├── cluster.py             Abstract clustering with latent Dirichlet allocation
 │   │   ├── embedding.py           Sentence embeddings using MiniLM and Qwen3
-│   │   └── tokenize.py            Word and document tokenizers
-│   ├── standardize/   
-│   │   ├── clean.py               Wrappers around RDKit functions for standaradizing SMILES
-│   │   ├── duplicates.py          Duplicate processing based on Median Absolute Deviation
-│   │   ├── filter.py              Filter based on selected features
-│   │   └── validate.py            Structure validation and error finding
+│   │   └── tokenize.py            Word and document tokenisers
+│   ├── standardize/
+│   │   ├── clean.py               RDKit-based SMILES standardisation
+│   │   ├── duplicates.py          Duplicate processing using median absolute deviation
+│   │   ├── filter.py              Filtering based on selected features
+│   │   └── validate.py            Structure validation and error detection
 │   ├── stats/
-│   │   ├── lmm.py                 Linear Mixed Models-realted code
+│   │   ├── lmm.py                 Linear mixed-model tools
 │   │   ├── tests.py               Statistical tests
-│   │   └── utils.py               Helper functions
+│   │   └── utils.py               Statistical helper functions
 │   ├── visualize/
-│   │   ├── ecdf.py                Emprical Cumulative Distribution Function of molecular inter-distance 
-│   │   ├── embedding.py           t-SNE and UMAP
-│   │   ├── performance.py         WIP: AU-GOOD framework-related plots
-│   │   ├── predictions.py         Bunch of plots for assessing model performance; currently only Regression
-│   │   ├── properties.py          Plot and compare molecular properties between datasets
-│   │   └── utils.py               Helper functions and my custom palette
+│   │   ├── ecdf.py                Empirical cumulative distribution functions for molecular distances
+│   │   ├── embedding.py           t-SNE and UMAP visualisation
+│   │   ├── performance.py         Work-in-progress AU-GOOD plots
+│   │   ├── predictions.py         Plots for assessing regression-model performance
+│   │   ├── properties.py          Tools for comparing molecular properties across datasets
+│   │   └── utils.py               Visualisation helpers and custom colour palette
 │   └── paths.py                   Paths for locally saved models and data
 ├── vantami-r/
 │   └── R/
-│       └── lmm.R                  Linear Mixed Models code
+│       └── lmm.R                  Linear mixed-model code in R
 ├── projects/
-│   ├── cddd_setup                 Files for setting up CDDD environment anywhere
-│   └── qcg_template               Template for QCG PilotJob training on bigger scale (one node)
-├── temp/           
-├── tests/          
-├── .gitignore   
-├── CHANGELOG.md 
-├── LICENSE   
-├── pyproject.toml  
-├── README.md       
-└── setup.py        
+│   ├── cddd_setup/                Files for setting up a CDDD environment
+│   └── qcg_template/              QCG PilotJob template for larger single-node training runs
+├── temp/
+├── tests/
+├── .gitignore
+├── CHANGELOG.md
+├── LICENSE
+├── pyproject.toml
+├── README.md
+└── setup.py
 ```
+
+### Notes
+
+This is primarily a research repository, so the level of maturity varies between modules. Code under deprecated/, 
+as well as features labeled as experimental, work in progress, or older code, may require adaptation before use 
+in a new project.
+
+### Citation
+
+If Vantami contributes to your work, please cite this repository and include the version used.
+
+### License
+
+This project is distributed under the terms described in [LICENSE](LICENSE).

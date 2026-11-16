@@ -1,30 +1,13 @@
-from __future__ import annotations
-
 import numpy as np
 import numpy.typing as npt
 
 
-def round_to_significant(value: float | int | npt.NDArray, n: int) -> float | int | npt.NDArray:
+def round_to_significant(value: float | int | npt.NDArray, n: int) -> float | npt.NDArray:
     """
-    Round a numeric scalar or NumPy array to `n` significant digits.
-
-    Parameters
-    ----------
-    value: float | int | npt.NDArray
-        A float, int, or NumPy array containing floats and/or integers.
-    n: int
-        Number of significant digits.
-
-    Returns
-    -------
-    float | int | npt.NDArray
-        Rounded value(s), retaining scalar input as a scalar and array input as a NumPy array.
+    Round a numeric scalar or NumPy array to n significant digits.
     """
 
-    if value is None:
-        return np.nan
-
-    if isinstance(value, str):
+    if value is None or isinstance(value, str):
         return np.nan
 
     if n < 1:
@@ -35,14 +18,18 @@ def round_to_significant(value: float | int | npt.NDArray, n: int) -> float | in
     if not np.issubdtype(values.dtype, np.number):
         raise TypeError("Value must be a numeric scalar or numeric NumPy array.")
 
-    nonzero = values != 0
+    scalar_input = values.ndim == 0
+    values = np.atleast_1d(values).astype(float, copy=False)
 
-    result = values.astype(float, copy=True)
+    result = values.copy()
+    finite_nonzero = np.isfinite(result) & (result != 0)
 
     with np.errstate(divide="ignore", invalid="ignore"):
-        decimal_places = n - np.floor(np.log10(np.abs(result))).astype(int) - 1
+        decimal_places = n - np.floor(np.log10(np.abs(result[finite_nonzero]))).astype(int) - 1
 
-    result[nonzero] = np.round(result[nonzero], decimal_places[nonzero])
-    result[~nonzero] = 0.0
+    scale = np.power(10.0, decimal_places)
+    result[finite_nonzero] = np.round(result[finite_nonzero] * scale) / scale
 
-    return result.item() if np.isscalar(value) else result
+    result[result == 0] = 0.0
+
+    return result[0].item() if scalar_input else result

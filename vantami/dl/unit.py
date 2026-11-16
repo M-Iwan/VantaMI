@@ -295,8 +295,8 @@ class MMUnit(nn.Module, ABC):
             batch_data = self._batch_to_device(batch_data)
 
             with self._autocast_context():
-
                 y_pred = self(batch_data)
+
             y_true = batch_data["y_true"]
             y_wgts = batch_data["y_wgts"]
 
