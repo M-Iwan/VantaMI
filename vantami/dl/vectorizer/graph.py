@@ -839,7 +839,7 @@ class GraphVectorizer:
         edge_vec = pos[source] - pos[target]
         edge_dist = torch.linalg.vector_norm(edge_vec, dim=-1)
 
-        eps = torch.finfo(pos.geometry_dtype).eps
+        eps = torch.finfo(pos.dtype).eps
 
         if torch.any(edge_dist <= eps):
             raise ValueError("Spatial graph contains coincident atoms or near-zero interatomic distances.")
