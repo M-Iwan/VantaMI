@@ -1512,7 +1512,7 @@ def mol_2_mordred(mol: Chem.Mol | Iterable[Chem.Mol]):
 def dataframe_2_mordred(df: pl.DataFrame, smiles_col: str = "SMILES", mol_col: str = "Mol", output_col: str = "Mordred",
                         ignore_3D: bool = True, n_jobs: int = 1, batch_size: int = 512, timeout: int | None = None):
     """
-    Convert SMILES in a DataFrame to MAPC (MAP Chiral) fingerprints.
+    Convert SMILES in a DataFrame to 2d or 3D Mordred descriptors.
 
     Parameters
     ----------
