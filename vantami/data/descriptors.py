@@ -27,18 +27,22 @@ def _to_murcko(smiles: str, generic: bool, mod):
     """
     Convert a single SMILES to Murcko scaffold.
     """
-    if (mol := _to_mol(smiles)) is None:
-        print(f"Unable to construct valid molecule from {smiles}")
+    try:
+        if (mol := _to_mol(smiles)) is None:
+            print(f"Unable to construct valid molecule from {smiles}")
+            return None
+
+        scaffold = mod.GetScaffoldForMol(mol)
+
+        if generic:
+            scaffold = mod.MakeScaffoldGeneric(scaffold)
+
+        scaffold = Chem.MolToSmiles(scaffold)
+
+        return None if scaffold == "" else scaffold
+    except Exception as exc:
+        print(f"Unable to process < {smiles} >:\n{exc}")
         return None
-
-    scaffold = mod.GetScaffoldForMol(mol)
-
-    if generic:
-        scaffold = mod.MakeScaffoldGeneric(scaffold)
-
-    scaffold = Chem.MolToSmiles(scaffold)
-
-    return None if scaffold == "" else scaffold
 
 
 def smiles_2_murcko(smiles: str | Iterable[str], generic: bool = False):
@@ -121,11 +125,15 @@ def _to_inchi(smiles: str):
     """
     Convert a single SMILES to InChI.
     """
-    if (mol := _to_mol(smiles)) is None:
-        print(f"Unable to construct valid molecule from {smiles}")
-        return None
+    try:
+        if (mol := _to_mol(smiles)) is None:
+            print(f"Unable to construct valid molecule from {smiles}")
+            return None
 
-    return Chem.MolToInchi(mol)
+        return Chem.MolToInchi(mol)
+    except Exception as exc:
+        print(f"Unable to process < {smiles} >:\n{exc}")
+        return None
 
 
 def smiles_2_inchi(smiles: str | Iterable[str]):
@@ -203,11 +211,15 @@ def _to_inchi_key(smiles: str):
     """
     Convert a single SMILES to InChIKey.
     """
-    if (mol := _to_mol(smiles)) is None:
-        print(f"Unable to construct valid molecule from {smiles}")
-        return None
+    try:
+        if (mol := _to_mol(smiles)) is None:
+            print(f"Unable to construct valid molecule from {smiles}")
+            return None
 
-    return Chem.MolToInchiKey(mol)
+        return Chem.MolToInchiKey(mol)
+    except Exception as exc:
+        print(f"Unable to process < {smiles} >:\n{exc}")
+        return None
 
 
 def smiles_2_inchi_key(smiles: str | Iterable[str]):
@@ -284,16 +296,20 @@ def _to_fp(smiles: str, generator, count: bool):
     """
     Convert a single SMILES to a (Count) Extended Connectivity / Daylight / AtomPairs Fingerprint
     """
-    if (mol := _to_mol(smiles)) is None:
-        print(f"Unable to construct valid molecule from {smiles}")
+    try:
+        if (mol := _to_mol(smiles)) is None:
+            print(f"Unable to construct valid molecule from {smiles}")
+            return None
+
+        if count:
+            fp = np.asarray(generator.GetCountFingerprintAsNumPy(mol), dtype=np.uint32)
+        else:
+            fp = np.asarray(generator.GetFingerprintAsNumPy(mol), dtype=np.uint8)
+
+        return fp
+    except Exception as exc:
+        print(f"Unable to process < {smiles} >:\n{exc}")
         return None
-
-    if count:
-        fp = np.asarray(generator.GetCountFingerprintAsNumPy(mol), dtype=np.uint32)
-    else:
-        fp = np.asarray(generator.GetFingerprintAsNumPy(mol), dtype=np.uint8)
-
-    return fp
 
 
 def smiles_2_ecfp(smiles: str | Iterable[str], radius: int = 2, nbits: int = 1024, count: bool = False):
@@ -606,11 +622,15 @@ def _to_maccs(smiles: str, mod):
     """
     Convert a single SMILES to MACCS fingerprint.
     """
-    if (mol := _to_mol(smiles)) is None:
-        print(f"Unable to construct valid molecule from {smiles}")
-        return None
+    try:
+        if (mol := _to_mol(smiles)) is None:
+            print(f"Unable to construct valid molecule from {smiles}")
+            return None
 
-    return np.array(mod.GetMACCSKeysFingerprint(mol), dtype=np.uint8)
+        return np.array(mod.GetMACCSKeysFingerprint(mol), dtype=np.uint8)
+    except Exception as exc:
+        print(f"Unable to process < {smiles} >:\n{exc}")
+        return None
 
 
 def smiles_2_maccs(smiles: str | Iterable[str]):
@@ -698,11 +718,15 @@ def _fp_from_smarts(smiles: str, smarts: List):
     """
     Convert a single SMILES to fingerprint based on SMARTS patterns matching.
     """
-    if (mol := _to_mol(smiles)) is None:
-        print(f"Unable to construct valid molecule from {smiles}")
-        return None
+    try:
+        if (mol := _to_mol(smiles)) is None:
+            print(f"Unable to construct valid molecule from {smiles}")
+            return None
 
-    return np.array([1 if mol.HasSubstructMatch(sm) else 0 for sm in smarts], dtype=np.uint8)
+        return np.array([1 if mol.HasSubstructMatch(sm) else 0 for sm in smarts], dtype=np.uint8)
+    except Exception as exc:
+        print(f"Unable to process < {smiles} >:\n{exc}")
+        return None
 
 
 def smiles_2_klek(smiles: str | Iterable[str]):
@@ -797,12 +821,16 @@ def _to_rdkit(smiles: str, decimals: int, mod):
     """
     Convert a single SMILES to RDKit physicochemical descriptors.
     """
-    if (mol := _to_mol(smiles)) is None:
-        print(f"Unable to construct valid molecule from {smiles}")
-        return None
+    try:
+        if (mol := _to_mol(smiles)) is None:
+            print(f"Unable to construct valid molecule from {smiles}")
+            return None
 
-    desc = mod.CalcMolDescriptors(mol, silent=False, missingVal=np.nan).values()
-    return np.round(np.fromiter(desc, dtype=np.float64), decimals)
+        desc = mod.CalcMolDescriptors(mol, silent=False, missingVal=np.nan).values()
+        return np.round(np.fromiter(desc, dtype=np.float64), decimals)
+    except Exception as exc:
+        print(f"Unable to process < {smiles} >:\n{exc}")
+        return None
 
 
 def smiles_2_rdkit(smiles: str | Iterable[str], decimals: int = 5):
@@ -893,24 +921,28 @@ def _to_common_rdkit(smiles: str, decimals: int, mod):
     """
     Convert a single SMILES to selected RDKit physicochemical descriptors.
     """
-    keys = ["MolWt", "LogP", "MolMR", "NHeavy", "NHetero", "NHBA", "NHBD", "NRotBonds", "NRings", "TPSA"]
-    if (mol := _to_mol(smiles)) is None:
-        print(f"Unable to construct valid molecule from {smiles}")
-        return {key: None for key in keys}
+    try:
+        keys = ["MolWt", "LogP", "MolMR", "NHeavy", "NHetero", "NHBA", "NHBD", "NRotBonds", "NRings", "TPSA"]
+        if (mol := _to_mol(smiles)) is None:
+            print(f"Unable to construct valid molecule from {smiles}")
+            return {key: None for key in keys}
 
-    crippen = mod.CalcCrippenDescriptors(mol)
-    return {
-        "MolWt": np.round(mod.CalcExactMolWt(mol), decimals),
-        "LogP": np.round(crippen[0], decimals),
-        "MolMR": np.round(crippen[1], decimals),
-        "NHeavy": mod.CalcNumHeavyAtoms(mol),
-        "NHetero": mod.CalcNumHeteroatoms(mol),
-        "NHBA": mod.CalcNumHBA(mol),
-        "NHBD": mod.CalcNumHBD(mol),
-        "NRotBonds": mod.CalcNumRotatableBonds(mol),
-        "NRings": mod.CalcNumRings(mol),
-        "TPSA": np.round(mod.CalcTPSA(mol), decimals),
-    }
+        crippen = mod.CalcCrippenDescriptors(mol)
+        return {
+            "MolWt": np.round(mod.CalcExactMolWt(mol), decimals),
+            "LogP": np.round(crippen[0], decimals),
+            "MolMR": np.round(crippen[1], decimals),
+            "NHeavy": mod.CalcNumHeavyAtoms(mol),
+            "NHetero": mod.CalcNumHeteroatoms(mol),
+            "NHBA": mod.CalcNumHBA(mol),
+            "NHBD": mod.CalcNumHBD(mol),
+            "NRotBonds": mod.CalcNumRotatableBonds(mol),
+            "NRings": mod.CalcNumRings(mol),
+            "TPSA": np.round(mod.CalcTPSA(mol), decimals),
+        }
+    except Exception as exc:
+        print(f"Unable to process < {smiles} >:\n{exc}")
+        return None
 
 
 def smiles_2_common_rdkit(smiles: str | Iterable[str], decimals: int = 5):
@@ -1000,10 +1032,14 @@ def _from_hf(smiles: str, model, tokenizer, torch, decimals):
     """
     Convert a single SMILES to embeddings from HuggingFace models.
     """
-    tokens = tokenizer(smiles, return_tensors="pt", padding=True, truncation=True, max_length=1024)
-    with torch.no_grad():
-        emb = model(**tokens).last_hidden_state.mean(dim=1).squeeze().numpy().reshape(-1)
-    return np.round(emb, decimals)
+    try:
+        tokens = tokenizer(smiles, return_tensors="pt", padding=True, truncation=True, max_length=1024)
+        with torch.no_grad():
+            emb = model(**tokens).last_hidden_state.mean(dim=1).squeeze().numpy().reshape(-1)
+        return np.round(emb, decimals)
+    except Exception as exc:
+        print(f"Unable to process < {smiles} >:\n{exc}")
+        return None
 
 
 def smiles_2_chemberta(smiles: str | Iterable[str], decimals: int = 5):
@@ -1300,11 +1336,15 @@ def _to_mapc(smiles: str, radius: int, nbits: int, fn):
     """
     Convert a single SMILES to MAPC descriptors.
     """
-    if (mol := _to_mol(smiles)) is None:
-        print(f"Unable to construct valid molecule from {smiles}")
-        return None
+    try:
+        if (mol := _to_mol(smiles)) is None:
+            print(f"Unable to construct valid molecule from {smiles}")
+            return None
 
-    return fn(mol, max_radius=radius, n_permutations=nbits)
+        return fn(mol, max_radius=radius, n_permutations=nbits)
+    except Exception as exc:
+        print(f"Unable to process < {smiles} >:\n{exc}")
+        return None
 
 
 def smiles_2_mapc(smiles: str | Iterable[str], radius: int = 2, nbits: int = 1024):
@@ -1407,32 +1447,48 @@ def dataframe_2_mapc(df: pl.DataFrame, smiles_col: str = "SMILES", output_col: s
 
 
 def _mordred_to_array(result) -> npt.NDArray:
-    return np.asarray(
-        [float(value) if np.isscalar(value) else np.nan for value in result],
-        dtype=np.float64
-    )
+    """
+    Conver Mordred descriptors to numpy array
+    """
+    try:
+        return np.asarray(
+            [float(value) if np.isscalar(value) else np.nan for value in result],
+            dtype=np.float64
+        )
+    except Exception as exc:
+        print(f"Unable to cast Mordred descriptors to array: \n{exc}")
+        return None
 
 
 def _to_mordred_2D(smiles: str, calc):
     """
     Convert a single SMILES to 2D Mordred descriptors.
     """
-    if (mol := _to_mol(smiles)) is None:
-        print(f"Unable to construct valid molecule from {smiles}")
-        return None
+    try:
+        if (mol := _to_mol(smiles)) is None:
+            print(f"Unable to construct valid molecule from {smiles}")
+            return None
 
-    return _mordred_to_array(calc(mol))
+        return _mordred_to_array(calc(mol))
+    except Exception as exc:
+        print(f"Unable to process < {smiles} >:\n{exc}")
+        return None
 
 
 def _to_mordred_3D(mol: Chem.Mol, calc):
     """
     Convert a single RDKit Mol to 3D Mordred descriptors.
     """
-    if mol.GetNumConformers() == 0:
-        warnings.warn(f"3D Mordred descriptors require at least one conformer with 3D coordinates. "
-                      f"Found None for {Chem.MolToSmiles(mol)}")
-        return np.array([np.nan] * 1826)
-    return _mordred_to_array(calc(mol))
+    try:
+        if mol.GetNumConformers() == 0:
+            warnings.warn(
+                f"3D Mordred descriptors require at least one valid conformer. Found None for {Chem.MolToSmiles(mol)}"
+            )
+            return np.array([np.nan] * 1826)
+        return _mordred_to_array(calc(mol))
+    except Exception as exc:
+        print(f"Unable to process RDKit mol:\n{exc}")
+        return None
 
 
 def smiles_2_mordred(smiles: str | Iterable[str]):
