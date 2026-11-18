@@ -36,7 +36,7 @@ class MMUnit(nn.Module, ABC):
 
     def __init__(self, device: str = "cpu", num_task: int = 1, model_name: str = "Unit", autocast: bool = False,
                  autocast_dtype: torch.dtype = torch.bfloat16, max_grad_norm: float | None = None, verbose: int = 1,
-                 seed: int | None = 42, log_config: Dict[str, bool] | None = None) -> None:
+                 seed: int | None = 42) -> None:
         """
         Initialize the MMUnit.
 
@@ -56,10 +56,6 @@ class MMUnit(nn.Module, ABC):
             Maximum gradient norm used for gradient clipping. Gradient clipping is disabled when this is `None`.
         verbose: int, optional
             Set verbosity level. 0 = no logs, 1 = standard progress, 2 = debugging
-        log_config: Dict[str, bool]
-            Logging configuration, with the following (option | default):
-                * `per_task_loss`: False
-                * `gradient_norm`: True
         """
         super().__init__()
 
@@ -73,20 +69,13 @@ class MMUnit(nn.Module, ABC):
         if autocast and self.device.type not in {"cuda", "cpu"}:
             raise ValueError(f"Autocast is unsupported for device type {self.device.type!r}.")
 
+        if autocast and self.device.type == "cpu" and autocast_dtype != torch.bfloat16:
+            raise ValueError("CPU autocast requires torch.bfloat16.")
+
         self.autocast = autocast
         self.autocast_dtype = autocast_dtype
         self.max_grad_norm = max_grad_norm
         self.verbose = verbose
-
-        default_log_config = {
-            "per_task_loss": False,
-            "gradient_norm": True,
-        }
-
-        self.log_config = {
-            **default_log_config,
-            **(log_config or {}),
-        }
 
         if seed is not None:
             self.set_seed(seed)
@@ -97,18 +86,18 @@ class MMUnit(nn.Module, ABC):
 
         self.logs = defaultdict(list)
         self.epoch = 1
-        self.best_state_dict: Optional[Dict[str, Tensor]] = None
         self.best_epoch: int | None = None
         self.best_fit_loss: float | None = None
         self.best_val_loss: float | None = None
+        self.best_checkpoint_path: Path | None = None
         self.hyperparameters: Dict[str, Any] = {}
         self.numpy_rng_state = None
         self.torch_rng_state = None
 
-    def log(self, message: str, level: int = 1):
+    def log(self, msg: str, level: int = 1):
         if self.verbose >= level:
             log_time = str(datetime.datetime.now()).split(".")[0]
-            print(f"{log_time}: {message}")
+            print(f"{log_time}: {msg}")
 
     @abstractmethod
     def forward(self, batch_data: dict) -> Tensor:
@@ -166,7 +155,35 @@ class MMUnit(nn.Module, ABC):
         return squared_norm ** 0.5
 
     @staticmethod
-    def _get_batch_group(batch_data: Any) -> Optional[Iterable[Any]]:
+    def _is_empty_dir(path: Path | str) -> bool:
+        path = Path(path).expanduser().resolve()
+        is_empty = path.is_dir() and not any(path.iterdir())
+        return is_empty
+
+    @staticmethod
+    def _verify_path_dir(path: Path | str) -> Path:
+        path = Path(path).expanduser().resolve()
+
+        if not path.exists():
+            raise FileNotFoundError(f"Directory does not exist: {path}")
+        if not path.is_dir():
+            raise NotADirectoryError(f"Expected a directory, got: {path}")
+
+        return path
+
+    @staticmethod
+    def _verify_path_file(path: Path | str) -> Path:
+        path = Path(path).expanduser().resolve()
+
+        if not path.exists():
+            raise FileNotFoundError(f"Path does not exist: {path}")
+        if not path.is_file():
+            raise IsADirectoryError(f"Expected a file, got: {path}")
+
+        return path
+
+    @staticmethod
+    def _get_batch_group(batch_data: Any) -> Iterable[Any] | None:
         """
         Retrieve optional group labels from a dict-like batch object.
         """
@@ -238,8 +255,7 @@ class MMUnit(nn.Module, ABC):
 
         if "Group" in loss_summary:
             detached["Group"] = {
-                tag: tuple(value.detach() for value in values)
-                for tag, values in loss_summary["Group"].items()
+                tag: tuple(value.detach() for value in values) for tag, values in loss_summary["Group"].items()
             }
 
         return detached
@@ -330,9 +346,7 @@ class MMUnit(nn.Module, ABC):
             loss_value.backward()
 
             gradient_norm = self.grad_norm()
-
-            if self.log_config["gradient_norm"]:
-                gradient_norms.append(gradient_norm)
+            gradient_norms.append(gradient_norm)
 
             self.log(f"Training batch {batch_index}: loss sum={total_loss.item():.5f}, "
                      f"weight sum={total_weight.item():.5f}, gradient norm={gradient_norm:.5f}.", level=2)
@@ -385,7 +399,7 @@ class MMUnit(nn.Module, ABC):
                 total_loss, total_weight = batch_loss["Total"]
 
                 if total_weight.item() <= 0:
-                    self.log(f"Training batch {batch_index} has no valid targets; skipping", level=1)
+                    self.log(f"Evaluation batch {batch_index} has no valid targets; skipping", level=1)
                     continue
 
                 epoch_data["y_pred"].append(y_pred.detach().float().cpu())
@@ -400,7 +414,7 @@ class MMUnit(nn.Module, ABC):
         return self._summarise_epoch(batch_losses, epoch_data)
 
     def fit(self, dataloader: Iterable[dict], n_epochs: int = 4, early_stop: int | None = 8,
-            save_freq: int | None = 8, save_dir: str | None = None):
+            save_freq: int | None = 8, save_dir: Path | str | None = None):
         """
         Train the model using training loss for early stopping.
         """
@@ -416,8 +430,27 @@ class MMUnit(nn.Module, ABC):
         if save_freq is not None and save_freq <= 0:
             raise ValueError("save_freq must be greater than 0.")
 
-        if save_dir is not None and not os.path.isdir(save_dir):
-            os.makedirs(save_dir, exist_ok=True)
+        best_checkpoint_path: Path | None = None
+        latest_checkpoint_path: Path | None = None
+
+        if save_dir is not None:
+            save_dir = Path(save_dir).expanduser().resolve()
+            save_dir.mkdir(parents=True, exist_ok=True)
+
+            if any(save_dir.iterdir()):
+                warnings.warn(
+                    f"Directory is not empty: {save_dir}. Existing files may be overwritten.", UserWarning, stacklevel=2
+                )
+
+            latest_checkpoint_path = save_dir / f"{self.model_name}_latest_checkpoint.pth"
+
+            if self.best_checkpoint_path is None:
+                self.best_checkpoint_path = save_dir / f"{self.model_name}_best_checkpoint.pth"
+
+            best_checkpoint_path = self.best_checkpoint_path
+
+        if early_stop is not None and save_dir is None:
+            raise ValueError("< save_dir > must be provided when early stopping is enabled")
 
         self.log(f"Starting training for up to {n_epochs} epoch(s).", level=1)
 
@@ -442,40 +475,56 @@ class MMUnit(nn.Module, ABC):
             current_loss = train_loss["Total"]
 
             self.log(f"Epoch {epoch_number} train loss: {current_loss:.5f}", level=1)
+            self.epoch = epoch_number + 1
 
-            if early_stop is not None:
-                if current_loss < self.best_fit_loss:
-                    self.best_fit_loss = current_loss
+            if current_loss < self.best_fit_loss:
+                self.best_fit_loss = current_loss
+                self.best_epoch = epoch_number
+
+                if early_stop is not None:
                     patience = deepcopy(early_stop)
-                    self.set_best_model(epoch_number)
 
-                    self.log(f"Epoch {epoch_number}: new best training loss: {self.best_fit_loss:.5f}.", level=1)
+                self.log(f"Epoch {epoch_number}: new best training loss: {self.best_fit_loss:.5f}.", level=1)
 
-                    if save_dir is not None:
-                        save_path = os.path.join(save_dir, f"{self.model_name}_min.pth")
-                        self.save(save_path)
-                        self.log(f"Saved best checkpoint to {save_path}.", level=1)
-                else:
-                    patience -= 1
-                    self.log(f"Epoch {epoch_number}: early-stopping patience remaining: {patience}.", level=1)
+                if best_checkpoint_path is not None:
+                    self.save(best_checkpoint_path)
+                    self.log(f"Saved best full checkpoint to {best_checkpoint_path}.", level=1)
+
+
+            elif early_stop is not None:
+                patience -= 1
+                self.log(f"Epoch {epoch_number}: early-stopping patience remaining: {patience}.", level=1)
 
                 if patience == 0:
-                    self.log(f"Early stopping at epoch {epoch_number} with minimum loss {self.best_fit_loss:.5f}", level=1)
-                    self.get_best_model()
-                    self.epoch = self.best_epoch
+                    self.log(f"Early stopping at epoch {epoch_number} with minimum loss {self.best_fit_loss:.5f}.", level=1)
+
+                    if latest_checkpoint_path is not None:
+                        self.save(latest_checkpoint_path)
+                        self.log(f"Saved latest full checkpoint to {latest_checkpoint_path}.", level=1)
+
+                    if best_checkpoint_path is None:
+                        raise RuntimeError(
+                            "Early stopping requires a saved best checkpoint, but no best checkpoint path is available."
+                        )
+
+                    if not best_checkpoint_path.is_file():
+                        raise FileNotFoundError(f"Best checkpoint does not exist: {best_checkpoint_path}")
+
+                    self.load(best_checkpoint_path)
+                    self.log(f"Restored full best state from epoch {self.epoch}.", level=1)
+
                     break
 
             if save_freq is not None and save_dir is not None and epoch_number % save_freq == 0:
-                save_path = os.path.join(save_dir, f"{self.model_name}_{epoch_number}.pth")
-                self.save(save_path)
-                self.log(f"Saved checkpoint to {save_path}.", level=1)
+                checkpoint_path = save_dir / f"{self.model_name}_epoch_{epoch_number}_checkpoint.pth"
+                self.save(checkpoint_path)
 
-            self.epoch += 1
+                self.log(f"Saved periodic full checkpoint to {checkpoint_path}.", level=1)
 
         self.log("Training completed.", level=1)
 
     def fit_eval(self, train_dataloader: Iterable[dict], eval_dataloader: Iterable[dict], n_epochs: int = 4,
-                 early_stop: Optional[int] = 4, save_freq: Optional[int] = 4, save_dir: Optional[str] = None):
+                 early_stop: int | None = 4, save_freq: int | None = 4, save_dir: Path | str | None = None):
         """
         Train and evaluate the model, using evaluation loss for early stopping.
         """
@@ -491,8 +540,27 @@ class MMUnit(nn.Module, ABC):
         if save_freq is not None and save_freq <= 0:
             raise ValueError("save_freq must be greater than 0.")
 
-        if save_dir is not None and not os.path.isdir(save_dir):
-            os.makedirs(save_dir, exist_ok=True)
+        if early_stop is not None and save_dir is None:
+            raise ValueError("< save_dir > must be provided when early stopping is enabled")
+
+        best_checkpoint_path: Path | None = None
+        latest_checkpoint_path: Path | None = None
+
+        if save_dir is not None:
+            save_dir = Path(save_dir).expanduser().resolve()
+            save_dir.mkdir(parents=True, exist_ok=True)
+
+            if any(save_dir.iterdir()):
+                warnings.warn(
+                    f"Directory is not empty: {save_dir}. Existing files may be overwritten.", UserWarning, stacklevel=2
+                )
+
+            latest_checkpoint_path = save_dir / f"{self.model_name}_latest_checkpoint.pth"
+
+            if self.best_checkpoint_path is None:
+                self.best_checkpoint_path = save_dir / f"{self.model_name}_best_checkpoint.pth"
+
+            best_checkpoint_path = self.best_checkpoint_path
 
         self.log(f"Starting training for up to {n_epochs} epoch(s).", level=1)
 
@@ -520,36 +588,52 @@ class MMUnit(nn.Module, ABC):
             current_loss = eval_loss["Total"]
 
             self.log(f"Epoch {epoch_number} train loss: {train_loss['Total']:.5f}", level=1)
-            self.log(f"Epoch {epoch_number} eval loss: {current_loss:.5f}", level=1)
+            self.log(f"Epoch {epoch_number} evaluation loss: {current_loss:.5f}", level=1)
+            self.epoch = epoch_number + 1
 
-            if early_stop is not None:
-                if current_loss < self.best_val_loss:
-                    self.best_val_loss = current_loss
+            if current_loss < self.best_val_loss:
+                self.best_val_loss = current_loss
+                self.best_epoch = epoch_number
+
+                if early_stop is not None:
                     patience = deepcopy(early_stop)
-                    self.set_best_model(epoch_number)
 
-                    self.log(f"Epoch {epoch_number}: new best evaluation loss: {self.best_val_loss:.5f}.", level=1)
+                self.log(f"Epoch {epoch_number}: new best evaluation loss: {self.best_val_loss:.5f}.", level=1)
 
-                    if save_dir is not None:
-                        save_path = os.path.join(save_dir, f"{self.model_name}_min.pth")
-                        self.save(save_path)
-                        self.log(f"Saved best checkpoint to {save_path}.", level=1)
-                else:
-                    patience -= 1
-                    self.log(f"Epoch {epoch_number}: early-stopping patience remaining: {patience}.", level=1)
+                if best_checkpoint_path is not None:
+                    self.save(best_checkpoint_path)
+
+                    self.log(f"Saved best full checkpoint to {best_checkpoint_path}.", level=1)
+
+            elif early_stop is not None:
+                patience -= 1
+
+                self.log(f"Epoch {epoch_number}: early-stopping patience remaining: {patience}.", level=1)
 
                 if patience == 0:
-                    self.log(f"Early stopping at epoch {epoch_number} with minimum loss {self.best_val_loss:.5f}", level=1)
-                    self.get_best_model()
-                    self.epoch = self.best_epoch
+                    self.log(f"Early stopping at epoch {epoch_number} with loss {self.best_val_loss:.5f}.", level=1)
+
+                    if latest_checkpoint_path is not None:
+                        self.save(latest_checkpoint_path)
+
+                        self.log(f"Saved latest full checkpoint to {latest_checkpoint_path}.", level=1)
+
+                    if best_checkpoint_path is None:
+                        raise RuntimeError("No best-checkpoint path is available for restoration.")
+
+                    if not best_checkpoint_path.is_file():
+                        raise FileNotFoundError(f"Best checkpoint does not exist: {best_checkpoint_path}")
+
+                    self.load(best_checkpoint_path)
+
+                    self.log(f"Restored full best state from epoch {self.epoch}.", level=1)
+
                     break
 
             if save_freq is not None and save_dir is not None and epoch_number % save_freq == 0:
-                save_path = os.path.join(save_dir, f"{self.model_name}_{epoch_number}.pth")
-                self.save(save_path)
-                self.log(f"Saved checkpoint to {save_path}.", level=1)
-
-            self.epoch += 1
+                checkpoint_path = save_dir / f"{self.model_name}_epoch_{epoch_number}_checkpoint.pth"
+                self.save(checkpoint_path)
+                self.log(f"Saved periodic full checkpoint to {checkpoint_path}.", level=1)
 
         self.log("Training and evaluation completed.", level=1)
 
@@ -593,16 +677,25 @@ class MMUnit(nn.Module, ABC):
         Returns
         -------
         dict
-            `Total` and `Task` entries contain `(loss_sum, weight_sum)`.
-            When group annotations are supplied, `Group` maps each tag to the
-            same tuple structure.
+            `Total` and `Task` entries contain `(loss_sum, weight_sum)`. When group annotations are supplied,
+            `Group` maps each tag to the same tuple structure.
         """
         if self.loss_fn is None:
             raise RuntimeError("Set a loss function before calculating loss.")
 
-        if y_pred.shape != y_true.shape or y_pred.shape != y_wgts.shape:
+        if y_pred.ndim != 2 or y_pred.shape[1] != self.num_task:
             raise ValueError(
-                f"Expected matching shapes, got y_pred={y_pred.shape}, y_true={y_true.shape}, y_wgts={y_wgts.shape}."
+                f"Expected < y_pred > with shape (batch_size, {self.num_task}), received {tuple(y_pred.shape)}."
+            )
+
+        if y_true.ndim != 2 or y_true.shape[1] != self.num_task:
+            raise ValueError(
+                f"Expected < y_ture > with shape (batch_size, {self.num_task}), received {tuple(y_pred.shape)}."
+            )
+
+        if y_wgts.ndim != 2 or y_wgts.shape[1] != self.num_task:
+            raise ValueError(
+                f"Expected < y_wgts > with shape (batch_size, {self.num_task}), received {tuple(y_pred.shape)}."
             )
 
         if not y_wgts.is_floating_point():
@@ -615,6 +708,14 @@ class MMUnit(nn.Module, ABC):
             raise ValueError("y_wgts must be non-negative.")
 
         valid_target_mask = torch.isfinite(y_true)
+        invalid_prediction_mask = valid_target_mask & ~torch.isfinite(y_pred)
+
+        if torch.any(invalid_prediction_mask):
+            invalid_count = invalid_prediction_mask.sum().item()
+            raise FloatingPointError(
+                f"< y_pred > contains {invalid_count} non-finite value(s) where y_true is finite"
+            )
+
         safe_y_true = torch.nan_to_num(
             y_true,
             nan=0.0,
@@ -623,6 +724,18 @@ class MMUnit(nn.Module, ABC):
         )
 
         elementwise_loss = self.loss_fn(y_pred, safe_y_true)
+
+        if elementwise_loss.shape != y_pred.shape:
+            raise ValueError(
+                f"Loss must return one value per prediction. Expected shape {y_pred.shape}, got {elementwise_loss.shape}."
+            )
+
+        if not torch.all(torch.isfinite(elementwise_loss)):
+            invalid_loss_count = (~torch.isfinite(elementwise_loss)).sum().item()
+            raise FloatingPointError(
+                f"Loss function produced {invalid_loss_count} non-finite element-wise loss value(s)."
+            )
+
         masked_weights = y_wgts * valid_target_mask
         weighted_loss = elementwise_loss * masked_weights
 
@@ -760,10 +873,11 @@ class MMUnit(nn.Module, ABC):
         if not callable(loss_fn):
             raise ValueError("Loss function must be callable.")
 
-        self.loss_fn = loss_fn(**loss_params) if loss_params else loss_fn()
+        params = {"reduction": "none", **(loss_params or {})}
+        self.loss_fn = loss_fn(**params)
 
         if getattr(self.loss_fn, "reduction", None) != "none":
-            raise ValueError('Loss function must be initialized with reduction="none".')
+            raise ValueError("Loss function must use reduction='none'.")
 
     def set_optimizer(self, optimizer_class: Any = torch.optim.AdamW, optimizer_params: Optional[dict] = None) -> None:
         """
@@ -805,25 +919,11 @@ class MMUnit(nn.Module, ABC):
         finally:
             del frame
 
-    def set_best_model(self, epoch_number: int) -> None:
-        """
-        Store the current model state as the best observed state.
-        """
-        self.best_state_dict = deepcopy(self.state_dict())
-        self.best_epoch = epoch_number
-
-    def get_best_model(self) -> None:
-        """
-        Restore the previously stored best model state.
-        """
-        if self.best_state_dict is None:
-            raise RuntimeError("Best model has not been saved yet.")
-
-        self.load_state_dict(self.best_state_dict)
-
     def save(self, path: Path | str) -> None:
         """
-        Save model, optimizer, scheduler, and hyperparameter states.
+        Save a full training state.
+
+        Includes model, optimizer, scheduler, logs, and RNG states.
         """
         path = Path(path).expanduser().resolve()
 
@@ -833,6 +933,7 @@ class MMUnit(nn.Module, ABC):
         path.parent.mkdir(parents=True, exist_ok=True)
 
         checkpoint = {
+            "checkpoint_type": "full_training_state",
             "model_state_dict": self.state_dict(),
             "optimizer_state_dict": (
                 self.optimizer.state_dict() if self.optimizer is not None else None
@@ -843,29 +944,35 @@ class MMUnit(nn.Module, ABC):
             "hyperparameters": self.hyperparameters,
             "epoch": self.epoch,
             "best_epoch": self.best_epoch,
-            "best_state_dict": self.best_state_dict,
             "best_fit_loss": self.best_fit_loss,
             "best_val_loss": self.best_val_loss,
+            "best_checkpoint_path": (
+                str(self.best_checkpoint_path) if self.best_checkpoint_path is not None else None
+            ),
             "logs": dict(self.logs),
             "numpy_rng_state": np.random.get_state(),
             "torch_rng_state": torch.get_rng_state(),
-            "cuda_rng_state_all": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+            "cuda_rng_state_all": (
+                torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+            )
         }
-        torch.save(checkpoint, str(path))
 
-    def load(self, path: str) -> None:
-        """
-        Load available model, optimizer, and scheduler state from a checkpoint.
-        """
-        path = Path(path).expanduser().resolve()
+        torch.save(checkpoint, path)
 
-        if not path.is_file():
-            raise ValueError(f"Path does not exist: {path}")
+    def load(self, path: Path | str) -> None:
+        """
+        Load a full training state from a checkpoint.
+        """
+        path = self._verify_path_file(path)
 
         if path.suffix.lower() not in {".pt", ".pth"}:
             raise ValueError(f"Unsupported file extension: {path.suffix}")
 
         checkpoint = torch.load(path, map_location=self.device)
+
+        if checkpoint.get("checkpoint_type", "full_training_state") != "full_training_state":
+            raise ValueError(f"Unsupported checkpoint type in: {path}")
+
         self.load_state_dict(checkpoint["model_state_dict"])
 
         optimizer_state = checkpoint.get("optimizer_state_dict")
@@ -878,11 +985,15 @@ class MMUnit(nn.Module, ABC):
 
         self.hyperparameters = checkpoint.get("hyperparameters", {})
         self.epoch = checkpoint["epoch"]
-        self.best_epoch = checkpoint["best_epoch"]
-        self.best_state_dict = checkpoint["best_state_dict"]
-        self.best_fit_loss = checkpoint.get("best_fit_loss", None)
-        self.best_val_loss = checkpoint.get("best_val_loss", None)
+        self.best_epoch = checkpoint.get("best_epoch")
+        self.best_fit_loss = checkpoint.get("best_fit_loss")
+        self.best_val_loss = checkpoint.get("best_val_loss")
         self.logs = defaultdict(list, checkpoint.get("logs", {}))
+
+        best_checkpoint_path = checkpoint.get("best_checkpoint_path")
+        self.best_checkpoint_path = (
+            Path(best_checkpoint_path).expanduser().resolve() if best_checkpoint_path is not None else None
+        )
 
         numpy_rng_state = checkpoint.get("numpy_rng_state")
         if numpy_rng_state is not None:
@@ -915,7 +1026,7 @@ class MMClassificationUnit(MMUnit):
 
     def __init__(self, device: str = "cpu", num_task: int = 1, model_name: str = "ClassUnit", autocast: bool = False,
                  autocast_dtype: torch.dtype = torch.bfloat16, max_grad_norm: float | None = None, verbose: int = 1,
-                 seed: int | None = 42, log_config: Dict[str, bool] | None = None) -> None:
+                 seed: int | None = 42) -> None:
 
         """
         Initialize the MMClassificationUnit.
@@ -936,15 +1047,11 @@ class MMClassificationUnit(MMUnit):
             Maximum gradient norm used for gradient clipping. Gradient clipping is disabled when this is `None`.
         verbose: int, optional
             Set verbosity level. 0 = no logs, 1 = standard progress, 2 = debugging
-        log_config: Dict[str, bool]
-            Logging configuration, with the following (option | default):
-                * `per_task_loss`: False
-                * `gradient_norm`: True
         """
 
         super().__init__(device=device, num_task=num_task, model_name=model_name, autocast=autocast,
                          autocast_dtype=autocast_dtype, max_grad_norm=max_grad_norm, verbose=verbose,
-                         seed=seed, log_config=log_config)
+                         seed=seed)
 
     @abstractmethod
     def forward(self, batch_data: dict) -> Tensor:
@@ -1071,7 +1178,7 @@ class MMRegressionUnit(MMUnit):
 
     def __init__(self, device: str = "cpu", num_task: int = 1, model_name: str = "ClassReg", autocast: bool = False,
                  autocast_dtype: torch.dtype = torch.bfloat16, max_grad_norm: float | None = None, verbose: int = 1,
-                 seed: int | None = 42, log_config: Dict[str, bool] | None = None) -> None:
+                 seed: int | None = 42) -> None:
         """
         Initialize the MMRegressionUnit.
 
@@ -1091,15 +1198,11 @@ class MMRegressionUnit(MMUnit):
             Maximum gradient norm used for gradient clipping. Gradient clipping is disabled when this is `None`.
         verbose: int, optional
             Set verbosity level. 0 = no logs, 1 = standard progress, 2 = debugging
-        log_config: Dict[str, bool]
-            Logging configuration, with the following (option | default):
-                * `per_task_loss`: False
-                * `gradient_norm`: True
         """
 
         super().__init__(device=device, num_task=num_task, model_name=model_name, autocast=autocast,
                          autocast_dtype=autocast_dtype, max_grad_norm=max_grad_norm, verbose=verbose,
-                         seed=seed, log_config=log_config)
+                         seed=seed)
 
     @abstractmethod
     def forward(self, batch_data: dict) -> Tensor:
