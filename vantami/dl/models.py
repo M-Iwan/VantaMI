@@ -20,8 +20,7 @@ class SingleGNN(MMRegressionUnit):
 
     def __init__(self, device: str, node_input_size: int, cov_gnn_params: dict, lin_params: dict, num_task: int,
                  autocast: bool = False, autocast_dtype: torch.dtype = torch.bfloat16,
-                 max_grad_norm: float = 1.0, verbose: int = 1, seed: int | None = 42,
-                 log_config: Dict[str, bool] | None = None, model_name: str = "SingleGNN"):
+                 max_grad_norm: float = 1.0, verbose: int = 1, seed: int | None = 42, model_name: str = "SingleGNN"):
 
         """
         Initialize SingleGNN class
@@ -48,15 +47,11 @@ class SingleGNN(MMRegressionUnit):
             Set verbosity level. 0 = no logs, 1 = standard progress, 2 = debugging
         model_name: str, optional
             Name of the model
-        log_config: Dict[str, bool]
-            Logging configuration, with the following (option | default):
-                * `per_task_loss`: False
-                * `gradient_norm`: True
         """
 
         super().__init__(device=device, num_task=num_task, model_name=model_name, autocast=autocast,
                          autocast_dtype=autocast_dtype, max_grad_norm=max_grad_norm, verbose=verbose,
-                         seed=seed, log_config=log_config)
+                         seed=seed)
 
         self.node_input_size = node_input_size
         self.cov_input_size = cov_gnn_params["input_dim"]
@@ -112,8 +107,7 @@ class DualGNN(MMRegressionUnit):
 
     def __init__(self, device: str, node_input_size: int, cov_gnn_params: dict, spatial_gnn_params: dict,
                  lin_params: dict, num_task: int, autocast: bool = False, autocast_dtype: torch.dtype = torch.bfloat16,
-                 max_grad_norm: float = 1.0, verbose: int = 1, seed: int | None = 42,
-                 log_config: Dict[str, bool] | None = None, model_name: str = "DualGNN"):
+                 max_grad_norm: float = 1.0, verbose: int = 1, seed: int | None = 42, model_name: str = "DualGNN"):
 
         """
         Initialize DualGNN class
@@ -142,15 +136,11 @@ class DualGNN(MMRegressionUnit):
             Set verbosity level. 0 = no logs, 1 = standard progress, 2 = debugging
         model_name: str, optional
             Name of the model
-        log_config: Dict[str, bool]
-            Logging configuration, with the following (option | default):
-                * `per_task_loss`: False
-                * `gradient_norm`: True
         """
 
         super().__init__(device=device, num_task=num_task, model_name=model_name, autocast=autocast,
                          autocast_dtype=autocast_dtype, max_grad_norm=max_grad_norm, verbose=verbose,
-                         seed=seed, log_config=log_config)
+                         seed=seed)
 
         self.node_input_size = node_input_size
         self.cov_input_size = cov_gnn_params["input_dim"]
@@ -222,7 +212,7 @@ class AngularGNN(MMRegressionUnit):
     def __init__(self, device: str, node_input_size: int, abf_input_size: int, cov_gnn_params: dict, spatial_gnn_params: dict,
                  lin_params: dict, num_task: int, autocast: bool = False, autocast_dtype: torch.dtype = torch.bfloat16,
                  max_grad_norm: float = 1.0, verbose: int = 1, seed: int | None = 42,
-                 log_config: Dict[str, bool] | None = None, model_name: str = "AngularGNN"):
+                 model_name: str = "AngularGNN"):
 
         """
         Initialize AngularGNN class
@@ -259,7 +249,7 @@ class AngularGNN(MMRegressionUnit):
 
         super().__init__(device=device, num_task=num_task, model_name=model_name, autocast=autocast,
                          autocast_dtype=autocast_dtype, max_grad_norm=max_grad_norm, verbose=verbose,
-                         seed=seed, log_config=log_config)
+                         seed=seed)
 
         self.node_input_size = node_input_size
         self.abf_input_size = abf_input_size
