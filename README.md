@@ -20,7 +20,7 @@ For an installation including (the most important) optional dependencies:
 `pip install "vantami[full]"`
 
 ### Versioning
-Current version: 0.6.0rc6
+Current version: 0.6.1rc1
 
 Versioning follows standard conventions where practical. Minor releases usually reflect larger updates to a particular
 module or group of related features.
