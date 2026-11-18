@@ -298,7 +298,7 @@ class MMUnit(nn.Module, ABC):
 
         return normalised_tags
 
-    def _summarise_epoch(self, batch_losses: List[LossSummary], epoch_data: Dict[str, List[Tensor]]):
+    def _summarise_epoch(self, batch_losses: List[LossSummary], epoch_data: Dict[str, List[Tensor]] | None):
         """
         Aggregate losses and metrics accumulated over one epoch.
         """
@@ -307,7 +307,10 @@ class MMUnit(nn.Module, ABC):
 
         cumulative_loss = reduce(self.combine_loss, batch_losses)
         normalised_loss = self.normalize_loss(cumulative_loss)
-        epoch_metrics = self.mw_metrics(**self.pack_epoch_data(epoch_data))
+        if epoch_data is not None:
+            epoch_metrics = self.mw_metrics(**self.pack_epoch_data(epoch_data))
+        else:
+            epoch_metrics = {"Total": [], "Task": []}
 
         return normalised_loss, epoch_metrics
 
@@ -347,7 +350,7 @@ class MMUnit(nn.Module, ABC):
         else:
             self.scheduler.step()
 
-    def fit_epoch(self, dataloader: Iterable[dict]) -> Tuple[LossSummary, Dict[str, Any], List[float]]:
+    def fit_epoch(self, dataloader: Iterable[dict], full_metrics: bool) -> Tuple[LossSummary, Dict[str, Any], List[float]]:
         """
         Train the model for one epoch.
 
@@ -355,6 +358,8 @@ class MMUnit(nn.Module, ABC):
         ----------
         dataloader : iterable
             Iterable yielding batches.
+        full_metrics : bool
+            Flag to calculate full sklearn-like suite of performance metrics.
 
         Returns
         -------
@@ -367,7 +372,7 @@ class MMUnit(nn.Module, ABC):
         self.train()
 
         batch_losses: List[LossSummary] = []
-        epoch_data = defaultdict(list)
+        epoch_data = defaultdict(list) if full_metrics else None
         gradient_norms = []
 
         for batch_index, batch_data in enumerate(dataloader, start=1):
@@ -401,13 +406,12 @@ class MMUnit(nn.Module, ABC):
                 self.log(f"Training batch {batch_index} has no valid targets; skipping", level=1)
                 continue
 
-            epoch_data["y_pred"].append(y_pred.detach().float().cpu())
-            epoch_data["y_true"].append(y_true.detach().float().cpu())
-            epoch_data["y_wgts"].append(y_wgts.detach().float().cpu())
+            if full_metrics:
+                epoch_data["y_pred"].append(y_pred.detach().float().cpu())
+                epoch_data["y_true"].append(y_true.detach().float().cpu())
+                epoch_data["y_wgts"].append(y_wgts.detach().float().cpu())
 
-            loss_value = total_loss / total_weight.clamp_min(
-                torch.finfo(total_weight.dtype).eps
-            )
+            loss_value = total_loss / total_weight.clamp_min(torch.finfo(total_weight.dtype).eps)
             loss_value.backward()
 
             gradient_norm = self.grad_norm()
@@ -417,10 +421,7 @@ class MMUnit(nn.Module, ABC):
                      f"weight sum={total_weight.item():.5f}, gradient norm={gradient_norm:.5f}.", level=2)
 
             if self.max_grad_norm is not None:
-                torch.nn.utils.clip_grad_norm_(
-                    self.parameters(),
-                    max_norm=self.max_grad_norm,
-                )
+                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=self.max_grad_norm)
 
             self.optimizer.step()
 
@@ -429,14 +430,14 @@ class MMUnit(nn.Module, ABC):
         epoch_loss, epoch_metrics = self._summarise_epoch(batch_losses, epoch_data)
         return epoch_loss, epoch_metrics, gradient_norms
 
-    def eval_epoch(self, dataloader: Iterable[dict]) -> Tuple[LossSummary, Dict[str, Any]]:
+    def eval_epoch(self, dataloader: Iterable[dict], full_metrics: bool) -> Tuple[LossSummary, Dict[str, Any]]:
         """
         Evaluate the model.
         """
         self.eval()
 
         batch_losses: List[LossSummary] = []
-        epoch_data = {"y_pred": [], "y_true": [], "y_wgts": []}
+        epoch_data = defaultdict(list) if full_metrics else None
 
         with torch.no_grad():
             for batch_index, batch_data in enumerate(dataloader, start=1):
@@ -467,9 +468,10 @@ class MMUnit(nn.Module, ABC):
                     self.log(f"Evaluation batch {batch_index} has no valid targets; skipping", level=1)
                     continue
 
-                epoch_data["y_pred"].append(y_pred.detach().float().cpu())
-                epoch_data["y_true"].append(y_true.detach().float().cpu())
-                epoch_data["y_wgts"].append(y_wgts.detach().float().cpu())
+                if full_metrics:
+                    epoch_data["y_pred"].append(y_pred.detach().float().cpu())
+                    epoch_data["y_true"].append(y_true.detach().float().cpu())
+                    epoch_data["y_wgts"].append(y_wgts.detach().float().cpu())
 
                 self.log(f"Evaluation batch {batch_index}: loss sum={total_loss.item():.5f}, "
                          f"weight sum={total_weight.item():.5f}.", level=2)
@@ -479,7 +481,7 @@ class MMUnit(nn.Module, ABC):
         return self._summarise_epoch(batch_losses, epoch_data)
 
     def fit(self, dataloader: Iterable[dict], n_epochs: int = 64, early_stop: int | None = 8,
-            save_freq: int | None = 8, save_dir: Path | str | None = None):
+            save_freq: int | None = 8, save_dir: Path | str | None = None, full_metrics: bool = False):
         """
         Train the model using training loss for early stopping.
         """
@@ -533,7 +535,7 @@ class MMUnit(nn.Module, ABC):
         for epoch_number in range(start_epoch, end_epoch):
             self.log(f"Starting training epoch {epoch_number}/{n_epochs}.", level=1)
 
-            train_loss, train_metrics, train_grad_norms = self.fit_epoch(dataloader)
+            train_loss, train_metrics, train_grad_norms = self.fit_epoch(dataloader, full_metrics=full_metrics)
 
             self.logs["train_loss"].append((epoch_number, train_loss))
             self.logs["train_metrics"].append((epoch_number, train_metrics))
@@ -602,7 +604,8 @@ class MMUnit(nn.Module, ABC):
             mlflow.end_run()
 
     def fit_eval(self, train_dataloader: Iterable[dict], eval_dataloader: Iterable[dict], n_epochs: int = 64,
-                 early_stop: int | None = 8, save_freq: int | None = 8, save_dir: Path | str | None = None):
+                 early_stop: int | None = 8, save_freq: int | None = 8, save_dir: Path | str | None = None,
+                 train_full_metrics: bool = False, eval_full_metrics: bool = True):
         """
         Train and evaluate the model, using evaluation loss for early stopping.
         """
@@ -656,8 +659,8 @@ class MMUnit(nn.Module, ABC):
         for epoch_number in range(start_epoch, end_epoch):
             self.log(f"Starting training and evaluation epoch {epoch_number}/{n_epochs}.", level=1)
 
-            train_loss, train_metrics, train_grad_norms = self.fit_epoch(train_dataloader)
-            eval_loss, eval_metrics = self.eval_epoch(eval_dataloader)
+            train_loss, train_metrics, train_grad_norms = self.fit_epoch(train_dataloader, full_metrics=train_full_metrics)
+            eval_loss, eval_metrics = self.eval_epoch(eval_dataloader, full_metrics=eval_full_metrics)
 
             self._step_scheduler(eval_loss["Total"])
 
