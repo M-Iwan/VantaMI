@@ -9,6 +9,8 @@ import numpy as np
 import numpy.typing as npt
 import polars as pl
 
+from vantami.data.partition import batch_data
+
 
 def _from_hf(string: str, model, torch, decimals):
     """
@@ -39,7 +41,7 @@ def string_2_minilm(string: str | List[str] | npt.NDArray[np.str_], decimals: in
 
     try:
         from sentence_transformers import SentenceTransformer
-        from vantami.cache import get_minilm_model_path
+        from vantami.paths import get_minilm_model_path
     except ImportError as exc:
         raise ImportError(f"Function < string_2_minilm > requires < sentence_transformers > library:\n{exc}")
 
@@ -92,10 +94,9 @@ def dataframe_2_minilm(df: pl.DataFrame, string_col: str = "String", output_col:
     """
 
     try:
-        from vantami.cache import get_minilm_model_path
-        from vantami.data.descriptors import batch_data
+        from vantami.paths import get_minilm_model_path
     except ImportError as exc:
-        raise ImportError(f"Function < dataframe_2_minilm > requires the MiniLM cache utilities:\n{exc}")
+        raise ImportError(f"Function < dataframe_2_minilm > requires the MiniLM paths utilities:\n{exc}")
 
     if not get_minilm_model_path().is_file():
         get_minilm()
@@ -135,7 +136,7 @@ def get_minilm():
     try:
         import truststore
         from sentence_transformers import SentenceTransformer
-        from vantami.cache import get_minilm_model_path
+        from vantami.paths import get_minilm_model_path
     except ImportError as exc:
         raise ImportError(f"Function < get_minilm > requires sentence_transformers and truststore libraries:\n{exc}")
 
@@ -169,7 +170,7 @@ def string_2_qwen3(string:str | List[str] | npt.NDArray[np.str_], decimals: int 
 
     try:
         from sentence_transformers import SentenceTransformer
-        from vantami.cache import get_qwen3_model_path
+        from vantami.paths import get_qwen3_model_path
     except ImportError as exc:
         raise ImportError(f"Function < string_2_qwen3 > requires < sentence_transformers > library:\n{exc}")
 
@@ -217,15 +218,14 @@ def dataframe_2_qwen3(df: pl.DataFrame, string_col: str = "String", output_col: 
 
     Returns
     -------
-    df : pl.DataFrame
+    df: pl.DataFrame
         A polars Dataframe with added Qwen3 column.
     """
 
     try:
-        from vantami.cache import get_qwen3_model_path
-        from vantami.data.descriptors import batch_data
+        from vantami.paths import get_qwen3_model_path
     except ImportError as exc:
-        raise ImportError(f"Function < dataframe_2_qwen3 > requires the Qwen3 cache utilities:\n{exc}")
+        raise ImportError(f"Function < dataframe_2_qwen3 > requires the Qwen3 paths utilities:\n{exc}")
 
     if not get_qwen3_model_path().is_file():
         get_qwen3()
@@ -265,7 +265,7 @@ def get_qwen3():
     try:
         import truststore
         from sentence_transformers import SentenceTransformer
-        from vantami.cache import get_qwen3_model_path
+        from vantami.paths import get_qwen3_model_path
     except ImportError as exc:
         raise ImportError(f"Function < get_qwen3 > requires sentence_transformers and truststore libraries:\n{exc}")
 
