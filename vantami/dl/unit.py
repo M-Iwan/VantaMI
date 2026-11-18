@@ -11,6 +11,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import numpy.typing as npt
+import mlflow
 
 from sklearn.metrics import (confusion_matrix, roc_auc_score, r2_score, mean_absolute_error, root_mean_squared_error,
                              average_precision_score, brier_score_loss)
@@ -94,10 +95,74 @@ class MMUnit(nn.Module, ABC):
         self.numpy_rng_state = None
         self.torch_rng_state = None
 
+        self.mlflow_enabled: bool = False
+        self.mlflow_experiment_name: str | None = None
+        self.mlflow_run_name: str | None = None
+
     def log(self, msg: str, level: int = 1):
         if self.verbose >= level:
             log_time = str(datetime.datetime.now()).split(".")[0]
             print(f"{log_time}: {msg}")
+
+    def enable_mlflow(self, experiment_name: str, run_name: str | None = None) -> None:
+        """
+        Enable MLflow tracking for fit() and fit_eval().
+
+        MLFLOW_TRACKING_URI must be set by the SLURM job environment.
+        """
+        tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
+
+        if not tracking_uri:
+            raise RuntimeError("MLFLOW_TRACKING_URI is not set. Set it in the SLURM submission script.")
+
+        mlflow.set_tracking_uri(tracking_uri)
+        mlflow.set_experiment(experiment_name)
+
+        self.mlflow_enabled = True
+        self.mlflow_experiment_name = experiment_name
+        self.mlflow_run_name = run_name
+
+    def _mlflow_log_configuration(self) -> None:
+        """
+        Log static training/model information once per MLflow run.
+        """
+        if not self.mlflow_enabled:
+            return
+
+        mlflow.log_params({
+            "model_name": self.model_name,
+            "num_task": self.num_task,
+            "device": str(self.device),
+            "seed": self.hyperparameters.get("seed", "unknown"),
+            "autocast": self.autocast,
+            "autocast_dtype": str(self.autocast_dtype),
+            "max_grad_norm": self.max_grad_norm,
+            "loss_function": type(self.loss_fn).__name__ if self.loss_fn else None,
+            "optimizer": type(self.optimizer).__name__ if self.optimizer else None,
+            "scheduler": type(self.scheduler).__name__ if self.scheduler else None,
+            "slurm_job_id": os.getenv("SLURM_JOB_ID", "local"),
+        })
+
+    def _mlflow_log_epoch(self, epoch_number: int, train_loss: LossSummary, train_grad_norms: List[float],
+                          eval_loss: LossSummary | None = None) -> None:
+        if not self.mlflow_enabled:
+            return
+
+        metrics = {
+            "train/loss": float(train_loss["Total"]),
+        }
+
+        if self.optimizer is not None:
+            metrics["train/learning_rate"] = float(self.optimizer.param_groups[0]["lr"])
+
+        if train_grad_norms:
+            metrics["train/gradient_norm_mean"] = float(np.mean(train_grad_norms))
+            metrics["train/gradient_norm_max"] = float(np.max(train_grad_norms))
+
+        if eval_loss is not None:
+            metrics["eval/loss"] = float(eval_loss["Total"])
+
+        mlflow.log_metrics(metrics, step=epoch_number)
 
     @abstractmethod
     def forward(self, batch_data: dict) -> Tensor:
@@ -413,7 +478,7 @@ class MMUnit(nn.Module, ABC):
 
         return self._summarise_epoch(batch_losses, epoch_data)
 
-    def fit(self, dataloader: Iterable[dict], n_epochs: int = 4, early_stop: int | None = 8,
+    def fit(self, dataloader: Iterable[dict], n_epochs: int = 64, early_stop: int | None = 8,
             save_freq: int | None = 8, save_dir: Path | str | None = None):
         """
         Train the model using training loss for early stopping.
@@ -429,6 +494,10 @@ class MMUnit(nn.Module, ABC):
 
         if save_freq is not None and save_freq <= 0:
             raise ValueError("save_freq must be greater than 0.")
+
+        if self.mlflow_enabled:
+            mlflow.start_run(run_name=self.mlflow_run_name)
+            self._mlflow_log_configuration()
 
         best_checkpoint_path: Path | None = None
         latest_checkpoint_path: Path | None = None
@@ -470,6 +539,12 @@ class MMUnit(nn.Module, ABC):
             self.logs["train_metrics"].append((epoch_number, train_metrics))
             self.logs["train_grad_norms"].append((epoch_number, train_grad_norms))
 
+            self._mlflow_log_epoch(
+                epoch_number=epoch_number,
+                train_loss=train_loss,
+                train_grad_norms=train_grad_norms,
+            )
+
             self._step_scheduler(train_loss["Total"])
 
             current_loss = train_loss["Total"]
@@ -489,7 +564,8 @@ class MMUnit(nn.Module, ABC):
                 if best_checkpoint_path is not None:
                     self.save(best_checkpoint_path)
                     self.log(f"Saved best full checkpoint to {best_checkpoint_path}.", level=1)
-
+                    if self.mlflow_enabled:
+                        mlflow.log_artifact(str(best_checkpoint_path), artifact_path="checkpoints")
 
             elif early_stop is not None:
                 patience -= 1
@@ -522,9 +598,11 @@ class MMUnit(nn.Module, ABC):
                 self.log(f"Saved periodic full checkpoint to {checkpoint_path}.", level=1)
 
         self.log("Training completed.", level=1)
+        if self.mlflow_enabled:
+            mlflow.end_run()
 
-    def fit_eval(self, train_dataloader: Iterable[dict], eval_dataloader: Iterable[dict], n_epochs: int = 4,
-                 early_stop: int | None = 4, save_freq: int | None = 4, save_dir: Path | str | None = None):
+    def fit_eval(self, train_dataloader: Iterable[dict], eval_dataloader: Iterable[dict], n_epochs: int = 64,
+                 early_stop: int | None = 8, save_freq: int | None = 8, save_dir: Path | str | None = None):
         """
         Train and evaluate the model, using evaluation loss for early stopping.
         """
@@ -542,6 +620,10 @@ class MMUnit(nn.Module, ABC):
 
         if early_stop is not None and save_dir is None:
             raise ValueError("< save_dir > must be provided when early stopping is enabled")
+
+        if self.mlflow_enabled:
+            mlflow.start_run(run_name=self.mlflow_run_name)
+            self._mlflow_log_configuration()
 
         best_checkpoint_path: Path | None = None
         latest_checkpoint_path: Path | None = None
@@ -585,6 +667,13 @@ class MMUnit(nn.Module, ABC):
             self.logs["eval_loss"].append((epoch_number, eval_loss))
             self.logs["eval_metrics"].append((epoch_number, eval_metrics))
 
+            self._mlflow_log_epoch(
+                epoch_number=epoch_number,
+                train_loss=train_loss,
+                train_grad_norms=train_grad_norms,
+                eval_loss=eval_loss,
+            )
+
             current_loss = eval_loss["Total"]
 
             self.log(f"Epoch {epoch_number} train loss: {train_loss['Total']:.5f}", level=1)
@@ -602,8 +691,9 @@ class MMUnit(nn.Module, ABC):
 
                 if best_checkpoint_path is not None:
                     self.save(best_checkpoint_path)
-
                     self.log(f"Saved best full checkpoint to {best_checkpoint_path}.", level=1)
+                    if self.mlflow_enabled:
+                        mlflow.log_artifact(str(best_checkpoint_path), artifact_path="checkpoints")
 
             elif early_stop is not None:
                 patience -= 1
@@ -634,6 +724,8 @@ class MMUnit(nn.Module, ABC):
                 checkpoint_path = save_dir / f"{self.model_name}_epoch_{epoch_number}_checkpoint.pth"
                 self.save(checkpoint_path)
                 self.log(f"Saved periodic full checkpoint to {checkpoint_path}.", level=1)
+                if self.mlflow_enabled:
+                    mlflow.end_run()
 
         self.log("Training and evaluation completed.", level=1)
 
