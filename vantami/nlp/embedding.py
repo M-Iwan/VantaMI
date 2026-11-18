@@ -18,7 +18,7 @@ def _from_hf(string: str, model, torch, decimals):
     """
     with torch.no_grad():
         emb = model.encode(string, normalize_embeddings=True)
-    return np.round(np.asarray(emb, dtype=np.float32, decimals))
+    return np.round(np.asarray(emb, dtype=np.float32), decimals)
 
 
 def string_2_minilm(string: str | List[str] | npt.NDArray[np.str_], decimals: int = 5):
