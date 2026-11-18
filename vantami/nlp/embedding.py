@@ -18,7 +18,7 @@ def _from_hf(string: str, model, torch, decimals):
     """
     with torch.no_grad():
         emb = model.encode(string, normalize_embeddings=True)
-    return np.round(np.asarray(emb, dtype=np.float32, decimals)
+    return np.round(np.asarray(emb, dtype=np.float32, decimals))
 
 
 def string_2_minilm(string: str | List[str] | npt.NDArray[np.str_], decimals: int = 5):
@@ -72,11 +72,11 @@ def dataframe_2_minilm(df: pl.DataFrame, string_col: str = "String", output_col:
 
     Parameters
     ----------
-    df : pl.DataFrame
+    df: pl.DataFrame
         A polars DataFrame.
-    string_col : str
+    string_col: str
         Name of column with strings to convert.
-    output_col : str, optional
+    output_col: str, optional
         Name of column for the output.
     decimals: int
         Number of decimals to keep.
@@ -89,7 +89,7 @@ def dataframe_2_minilm(df: pl.DataFrame, string_col: str = "String", output_col:
 
     Returns
     -------
-    df : pl.DataFrame
+    df: pl.DataFrame
         A polars Dataframe with added MiniLM column.
     """
 
@@ -201,11 +201,11 @@ def dataframe_2_qwen3(df: pl.DataFrame, string_col: str = "String", output_col: 
 
     Parameters
     ----------
-    df : pl.DataFrame
+    df: pl.DataFrame
         A polars DataFrame.
-    string_col : str
+    string_col: str
         Name of column with strings to convert.
-    output_col : str, optional
+    output_col: str, optional
         Name of column for the output.
     decimals: int
         Number of decimals to keep.
