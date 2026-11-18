@@ -877,7 +877,7 @@ def one_hot_encode_df(df: pl.DataFrame, input_col: str, output_col: str):
 
     unique_values = sorted(df[input_col].drop_nulls().unique())
     if not unique_values:
-        values = [np.zeros(shape=1, dtype=np.int64)]*len(df)
+        values = [np.zeros(shape=1, dtype=np.int64)] * len(df)
         return df.with_columns(
             pl.Series(name=output_col, values=values, dtype=pl.Array(pl.Int64, shape=1))
         )
