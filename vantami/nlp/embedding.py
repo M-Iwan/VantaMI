@@ -18,7 +18,7 @@ def _from_hf(string: str, model, torch, decimals):
     """
     with torch.no_grad():
         emb = model.encode(string, normalize_embeddings=True)
-    return np.round(emb, decimals)
+    return np.round(np.asarray(emb, dtype=np.float32, decimals)
 
 
 def string_2_minilm(string: str | List[str] | npt.NDArray[np.str_], decimals: int = 5):
@@ -120,7 +120,7 @@ def dataframe_2_minilm(df: pl.DataFrame, string_col: str = "String", output_col:
         },
         schema={
             string_col: pl.String,
-            output_col: pl.Array(pl.Float64, shape=384)
+            output_col: pl.Array(pl.Float32, shape=384)
         }
     )
 
@@ -249,7 +249,7 @@ def dataframe_2_qwen3(df: pl.DataFrame, string_col: str = "String", output_col: 
         },
         schema={
             string_col: pl.String,
-            output_col: pl.Array(pl.Float64, shape=1024)
+            output_col: pl.Array(pl.Float32, shape=1024)
         }
     )
 
