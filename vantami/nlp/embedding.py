@@ -12,23 +12,21 @@ import polars as pl
 from vantami.data.partition import batch_data
 
 
-def _from_hf(string: str, model, torch, decimals):
+def _from_hf(string: str, model, torch):
     """
     Convert a single string to embeddings from HuggingFace models.
     """
     with torch.no_grad():
         emb = model.encode(string, normalize_embeddings=True)
-    return np.round(np.asarray(emb, dtype=np.float32), decimals)
+    return emb
 
 
-def string_2_minilm(string: str | List[str] | npt.NDArray[np.str_], decimals: int = 5):
+def string_2_minilm(string: str | List[str] | npt.NDArray[np.str_]):
     """
     Parameters
     ----------
     string: str | List[str] | npt.NDArray[str]
         An English sentence.
-    decimals: int
-        Number of decimals to keep.
 
     Returns
     -------
@@ -56,17 +54,17 @@ def string_2_minilm(string: str | List[str] | npt.NDArray[np.str_], decimals: in
     model.eval()
 
     if isinstance(string, str):
-        return _from_hf(string=string, model=model, torch=torch, decimals=decimals)
+        return _from_hf(string=string, model=model, torch=torch)
 
     elif isinstance(string, (list, np.ndarray)):
-        return [_from_hf(string=st, model=model, torch=torch, decimals=decimals) for st in string]
+        return [_from_hf(string=st, model=model, torch=torch) for st in string]
 
     else:
         raise TypeError(f"Expected string to be str, List[str] or npt.NDArray[str], got {type(string)} instead")
 
 
 def dataframe_2_minilm(df: pl.DataFrame, string_col: str = "String", output_col: str = "MiniLM",
-                       decimals: int = 5, n_jobs: int = 1, batch_size: int = 512, timeout: int | None = None):
+                       n_jobs: int = 1, batch_size: int = 512, timeout: int | None = None):
     """
     Convert strings in a polars DataFrame to MiniLM embeddings.
 
@@ -78,8 +76,6 @@ def dataframe_2_minilm(df: pl.DataFrame, string_col: str = "String", output_col:
         Name of column with strings to convert.
     output_col: str, optional
         Name of column for the output.
-    decimals: int
-        Number of decimals to keep.
     n_jobs: int, optional
         Number of cores to use for calculations.
     batch_size: int, optional
@@ -110,7 +106,7 @@ def dataframe_2_minilm(df: pl.DataFrame, string_col: str = "String", output_col:
         return df.with_columns(pl.lit(None).alias(output_col))
 
     out = Parallel(n_jobs=n_jobs, verbose=1, timeout=timeout, backend="loky")(
-        delayed(string_2_minilm)(string=st, decimals=decimals) for st in string_batches
+        delayed(string_2_minilm)(string=st) for st in string_batches
     )
 
     string_df = pl.DataFrame(
@@ -120,7 +116,7 @@ def dataframe_2_minilm(df: pl.DataFrame, string_col: str = "String", output_col:
         },
         schema={
             string_col: pl.String,
-            output_col: pl.Array(pl.Float32, shape=384)
+            output_col: pl.Array(pl.Float64, shape=384)
         }
     )
 
@@ -150,14 +146,12 @@ def get_minilm():
     }
 
 
-def string_2_qwen3(string:str | List[str] | npt.NDArray[np.str_], decimals: int = 5):
+def string_2_qwen3(string:str | List[str] | npt.NDArray[np.str_]):
     """
     Parameters
     ----------
     string: str | List[str] | npt.NDArray[str]
         An English sentence.
-    decimals: int
-        Number of decimals to keep.
 
     Returns
     -------
@@ -185,17 +179,17 @@ def string_2_qwen3(string:str | List[str] | npt.NDArray[np.str_], decimals: int 
     model.eval()
 
     if isinstance(string, str):
-        return _from_hf(string=string, model=model, torch=torch, decimals=decimals)
+        return _from_hf(string=string, model=model, torch=torch)
 
     elif isinstance(string, (list, np.ndarray)):
-        return [_from_hf(string=st, model=model, torch=torch, decimals=decimals) for st in string]
+        return [_from_hf(string=st, model=model, torch=torch) for st in string]
 
     else:
         raise TypeError(f"Expected string to be str, List[str] or npt.NDArray[str], got {type(string)} instead")
 
 
 def dataframe_2_qwen3(df: pl.DataFrame, string_col: str = "String", output_col: str = "Qwen3",
-                      decimals: int = 5, n_jobs: int = 1, batch_size: int = 256, timeout: int | None = None):
+                      n_jobs: int = 1, batch_size: int = 256, timeout: int | None = None):
     """
     Convert strings in a polars DataFrame to Qwen3 embeddings.
 
@@ -207,8 +201,6 @@ def dataframe_2_qwen3(df: pl.DataFrame, string_col: str = "String", output_col: 
         Name of column with strings to convert.
     output_col: str, optional
         Name of column for the output.
-    decimals: int
-        Number of decimals to keep.
     n_jobs: int, optional
         Number of cores to use for calculations.
     batch_size: int, optional
@@ -239,7 +231,7 @@ def dataframe_2_qwen3(df: pl.DataFrame, string_col: str = "String", output_col: 
         return df.with_columns(pl.lit(None).alias(output_col))
 
     out = Parallel(n_jobs=n_jobs, verbose=1, timeout=timeout, backend="loky")(
-        delayed(string_2_qwen3)(string=st, decimals=decimals) for st in string_batches
+        delayed(string_2_qwen3)(string=st) for st in string_batches
     )
 
     string_df = pl.DataFrame(
@@ -249,7 +241,7 @@ def dataframe_2_qwen3(df: pl.DataFrame, string_col: str = "String", output_col: 
         },
         schema={
             string_col: pl.String,
-            output_col: pl.Array(pl.Float32, shape=1024)
+            output_col: pl.Array(pl.Float64, shape=1024)
         }
     )
 
