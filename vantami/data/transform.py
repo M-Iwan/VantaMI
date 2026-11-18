@@ -867,7 +867,7 @@ def one_hot_encode_df(df: pl.DataFrame, input_col: str, output_col: str):
 
     Returns
     -------
-    pl.DataFrame
+    pl.DataFrame, dict[str, int]
     """
     if input_col not in df.columns:
         raise ValueError(f"Column {input_col} not found in dataframe")
@@ -891,7 +891,7 @@ def one_hot_encode_df(df: pl.DataFrame, input_col: str, output_col: str):
             skip_nulls=False
         ).alias(output_col)
     )
-    return df
+    return df, val_2_idx
 
 
 def merge_arrays_dataframe(df: pl.DataFrame, input_cols: List[str], output_col: str):
