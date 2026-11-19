@@ -104,16 +104,13 @@ class MMUnit(nn.Module, ABC):
             log_time = str(datetime.datetime.now()).split(".")[0]
             print(f"{log_time}: {msg}")
 
-    def enable_mlflow(self, experiment_name: str, run_name: str | None = None) -> None:
+    def enable_mlflow(self, tracking_uri, experiment_name: str, run_name: str | None = None) -> None:
         """
         Enable MLflow tracking for fit() and fit_eval().
 
         MLFLOW_TRACKING_URI must be set by the SLURM job environment.
         """
-        tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
-
-        if not tracking_uri:
-            raise RuntimeError("MLFLOW_TRACKING_URI is not set. Set it in the SLURM submission script.")
+        os.environ["MLFLOW_TRACKING_URI"] = tracking_uri
 
         mlflow.set_tracking_uri(tracking_uri)
         mlflow.set_experiment(experiment_name)
@@ -727,8 +724,8 @@ class MMUnit(nn.Module, ABC):
                 checkpoint_path = save_dir / f"{self.model_name}_epoch_{epoch_number}_checkpoint.pth"
                 self.save(checkpoint_path)
                 self.log(f"Saved periodic full checkpoint to {checkpoint_path}.", level=1)
-                if self.mlflow_enabled:
-                    mlflow.end_run()
+        if self.mlflow_enabled:
+            mlflow.end_run()
 
         self.log("Training and evaluation completed.", level=1)
 
