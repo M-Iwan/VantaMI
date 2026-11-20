@@ -147,7 +147,7 @@ class MMUnit(nn.Module, ABC):
         """
 
     @abstractmethod
-    def mw_metrics(self, y_true: Tensor, y_pred: Tensor, y_wgts: Tensor) -> Dict[str, Any]:
+    def mw_metrics(self, y_true: Tensor, y_pred: Tensor, y_wgts: Tensor, per_task: bool = False) -> Dict[str, Any]:
         """
         Calculate overall and task-level weighted metrics for an epoch.
         """
@@ -244,7 +244,8 @@ class MMUnit(nn.Module, ABC):
 
         return normalised_tags
 
-    def _summarise_epoch(self, batch_losses: List[LossSummary], epoch_data: Dict[str, List[Tensor]] | None):
+    def _summarise_epoch(self, batch_losses: List[LossSummary], epoch_data: Dict[str, List[Tensor]] | None,
+                         per_task: bool = False):
         """
         Aggregate losses and metrics accumulated over one epoch.
         """
@@ -254,7 +255,7 @@ class MMUnit(nn.Module, ABC):
         cumulative_loss = reduce(self.combine_loss, batch_losses)
         normalised_loss = self.normalize_loss(cumulative_loss)
         if epoch_data is not None:
-            epoch_metrics = self.mw_metrics(**self.pack_epoch_data(epoch_data))
+            epoch_metrics = self.mw_metrics(**self.pack_epoch_data(epoch_data), per_task=per_task)
         else:
             epoch_metrics = {"Total": {}, "Task": {}}
 
@@ -361,16 +362,18 @@ class MMUnit(nn.Module, ABC):
         else:
             self.scheduler.step()
 
-    def fit_epoch(self, dataloader: Iterable[dict], full_metrics: bool) -> Tuple[LossSummary, Dict[str, Any], List[float]]:
+    def fit_epoch(self, dataloader: Iterable[dict], full_metrics: bool, per_task: bool = False):
         """
         Train the model for one epoch.
 
         Parameters
         ----------
-        dataloader : iterable
+        dataloader: iterable
             Iterable yielding batches.
-        full_metrics : bool
+        full_metrics: bool
             Flag to calculate full sklearn-like suite of performance metrics.
+        per_task: bool
+            Whether to save per-task logs and metrics
 
         Returns
         -------
@@ -438,12 +441,21 @@ class MMUnit(nn.Module, ABC):
 
             batch_losses.append(self._detach_loss_summary(batch_loss))
 
-        epoch_loss, epoch_metrics = self._summarise_epoch(batch_losses, epoch_data)
+        epoch_loss, epoch_metrics = self._summarise_epoch(batch_losses, epoch_data, per_task=per_task)
         return epoch_loss, epoch_metrics, gradient_norms
 
-    def eval_epoch(self, dataloader: Iterable[dict], full_metrics: bool) -> Tuple[LossSummary, Dict[str, Any]]:
+    def eval_epoch(self, dataloader: Iterable[dict], full_metrics: bool, per_task: bool = False):
         """
         Evaluate the model.
+
+        Parameters
+        ----------
+        dataloader: iterable
+            Iterable yielding batches.
+        full_metrics: bool
+            Flag to calculate full sklearn-like suite of performance metrics.
+        per_task: bool
+            Whether to save per-task logs and metrics
         """
         self.eval()
 
@@ -489,7 +501,7 @@ class MMUnit(nn.Module, ABC):
 
                 batch_losses.append(self._detach_loss_summary(batch_loss))
 
-        return self._summarise_epoch(batch_losses, epoch_data)
+        return self._summarise_epoch(batch_losses, epoch_data, per_task=per_task)
 
     def fit(self, dataloader: Iterable[dict], n_epochs: int = 64, early_stop: int | None = 8,
             save_freq: int | None = 8, save_dir: Path | str | None = None, full_metrics: bool = False,
@@ -543,7 +555,9 @@ class MMUnit(nn.Module, ABC):
         for epoch_number in range(start_epoch, end_epoch):
             self.log(f"Starting training epoch {epoch_number}/{end_epoch}.", level=1)
 
-            train_loss, train_metrics, train_grad_norms = self.fit_epoch(dataloader, full_metrics=full_metrics)
+            train_loss, train_metrics, train_grad_norms = self.fit_epoch(
+                dataloader, full_metrics=full_metrics, per_task=per_task
+            )
 
             self.logs["train_loss"].append((epoch_number, train_loss))
             self.logs["train_metrics"].append((epoch_number, train_metrics))
@@ -667,8 +681,12 @@ class MMUnit(nn.Module, ABC):
         for epoch_number in range(start_epoch, end_epoch):
             self.log(f"Starting training and evaluation epoch {epoch_number}/{end_epoch}.", level=1)
 
-            train_loss, train_metrics, train_grad_norms = self.fit_epoch(train_dataloader, full_metrics=train_full_metrics)
-            eval_loss, eval_metrics = self.eval_epoch(eval_dataloader, full_metrics=eval_full_metrics)
+            train_loss, train_metrics, train_grad_norms = self.fit_epoch(
+                train_dataloader, full_metrics=train_full_metrics, per_task=per_task
+            )
+            eval_loss, eval_metrics = self.eval_epoch(
+                eval_dataloader, full_metrics=eval_full_metrics, per_task=per_task
+            )
 
             self._step_scheduler(eval_loss["Total"])
 
@@ -1061,6 +1079,7 @@ class MMUnit(nn.Module, ABC):
                 str(self.best_checkpoint_path) if self.best_checkpoint_path is not None else None
             ),
             "logs": dict(self.logs),
+            "logs_df": self.logs_df,
             "numpy_rng_state": np.random.get_state(),
             "torch_rng_state": torch.get_rng_state(),
             "cuda_rng_state_all": (
@@ -1100,6 +1119,18 @@ class MMUnit(nn.Module, ABC):
         self.best_fit_loss = checkpoint.get("best_fit_loss")
         self.best_val_loss = checkpoint.get("best_val_loss")
         self.logs = defaultdict(list, checkpoint.get("logs", {}))
+
+        default_logs_df = pl.DataFrame(schema={
+            "model_name": pl.Utf8,
+            "model_id": pl.Utf8,
+            "epoch": pl.Int64,
+            "phase": pl.Utf8,
+            "task": pl.Utf8,
+            "metric": pl.Utf8,
+            "value": pl.Float64,
+        })
+
+        self.logs_df = checkpoint.get("logs_df", default_logs_df)
 
         best_checkpoint_path = checkpoint.get("best_checkpoint_path")
         self.best_checkpoint_path = (
@@ -1201,21 +1232,24 @@ class MMClassificationUnit(MMUnit):
 
         return self.score(y_true=y_true, y_pred=y_pred, y_wgts=y_wgts, y_score=y_score)
 
-    def mw_metrics(self, y_true: Tensor, y_pred: Tensor, y_wgts: Tensor) -> Dict[str, Any]:
+    def mw_metrics(self, y_true: Tensor, y_pred: Tensor, y_wgts: Tensor, per_task: bool = False) -> Dict[str, Any]:
         y_true_array = y_true.detach().cpu().numpy()
         logits = y_pred.detach().cpu().numpy()
         y_weight_array = y_wgts.detach().cpu().numpy()
 
         total_metrics = self._score_slice(y_true=y_true_array, logits=logits, y_wgts=y_weight_array)
 
-        task_metrics = {
-            f"Task_{task_index}": self._score_slice(
-                y_true=y_true_array[:, task_index],
-                logits=logits[:, task_index],
-                y_wgts=y_weight_array[:, task_index],
-            )
-            for task_index in range(self.num_task)
-        }
+        if per_task:
+            task_metrics = {
+                f"Task_{task_index}": self._score_slice(
+                    y_true=y_true_array[:, task_index],
+                    logits=logits[:, task_index],
+                    y_wgts=y_weight_array[:, task_index],
+                )
+                for task_index in range(self.num_task)
+            }
+        else:
+            task_metrics = {}
 
         return {"Total": total_metrics, "Task": task_metrics}
 
@@ -1349,7 +1383,7 @@ class MMRegressionUnit(MMUnit):
 
         return self.score(y_true=y_true, y_pred=y_pred, y_wgts=y_wgts)
 
-    def mw_metrics(self, y_true: Tensor, y_pred: Tensor, y_wgts: Tensor) -> Dict[str, Any]:
+    def mw_metrics(self, y_true: Tensor, y_pred: Tensor, y_wgts: Tensor, per_task: bool = False) -> Dict[str, Any]:
         y_true_array = y_true.detach().cpu().numpy()
         y_pred_array = y_pred.detach().cpu().numpy()
         y_weight_array = y_wgts.detach().cpu().numpy()
@@ -1360,14 +1394,17 @@ class MMRegressionUnit(MMUnit):
             y_wgts=y_weight_array,
         )
 
-        task_metrics = {
-            f"Task_{task_index}": self._score_slice(
-                y_true=y_true_array[:, task_index],
-                y_pred=y_pred_array[:, task_index],
-                y_wgts=y_weight_array[:, task_index],
-            )
-            for task_index in range(self.num_task)
-        }
+        if per_task:
+            task_metrics = {
+                f"Task_{task_index}": self._score_slice(
+                    y_true=y_true_array[:, task_index],
+                    y_pred=y_pred_array[:, task_index],
+                    y_wgts=y_weight_array[:, task_index],
+                )
+                for task_index in range(self.num_task)
+            }
+        else:
+            task_metrics = {}
 
         return {"Total": total_metrics, "Task": task_metrics}
 
