@@ -256,7 +256,7 @@ class MMUnit(nn.Module, ABC):
         if epoch_data is not None:
             epoch_metrics = self.mw_metrics(**self.pack_epoch_data(epoch_data))
         else:
-            epoch_metrics = {"Total": [], "Task": []}
+            epoch_metrics = {"Total": {}, "Task": {}}
 
         return normalised_loss, epoch_metrics
 
