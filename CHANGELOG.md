@@ -1,10 +1,10 @@
-# [0.6.1]: XX-XX-2026
+# [0.6.1]: XX-11-2026
 
 [Added]
 
 - Added `one_of_k_encoding` and `one_hot_encode_df` functions to data.transform
-- Added support for MLFlow for `MMUnit`
 - Added option for `MMUnit` for calculating full sklearn-based performance metrics via `full_metrics` parameter
+- Added more logging options fro `MMUnit`
 - More checks for datatype and shape correctness to `MMUnit`
 
 [Changed]
