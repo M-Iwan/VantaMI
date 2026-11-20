@@ -541,7 +541,7 @@ class MMUnit(nn.Module, ABC):
         patience = deepcopy(early_stop) if early_stop is not None else None
 
         for epoch_number in range(start_epoch, end_epoch):
-            self.log(f"Starting training epoch {epoch_number}/{n_epochs}.", level=1)
+            self.log(f"Starting training epoch {epoch_number}/{end_epoch}.", level=1)
 
             train_loss, train_metrics, train_grad_norms = self.fit_epoch(dataloader, full_metrics=full_metrics)
 
@@ -665,7 +665,7 @@ class MMUnit(nn.Module, ABC):
         patience = deepcopy(early_stop) if early_stop is not None else None
 
         for epoch_number in range(start_epoch, end_epoch):
-            self.log(f"Starting training and evaluation epoch {epoch_number}/{n_epochs}.", level=1)
+            self.log(f"Starting training and evaluation epoch {epoch_number}/{end_epoch}.", level=1)
 
             train_loss, train_metrics, train_grad_norms = self.fit_epoch(train_dataloader, full_metrics=train_full_metrics)
             eval_loss, eval_metrics = self.eval_epoch(eval_dataloader, full_metrics=eval_full_metrics)
@@ -1079,7 +1079,7 @@ class MMUnit(nn.Module, ABC):
         if path.suffix.lower() not in {".pt", ".pth"}:
             raise ValueError(f"Unsupported file extension: {path.suffix}")
 
-        checkpoint = torch.load(path, map_location=self.device)
+        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
 
         if checkpoint.get("checkpoint_type", "full_training_state") != "full_training_state":
             raise ValueError(f"Unsupported checkpoint type in: {path}")
@@ -1112,11 +1112,17 @@ class MMUnit(nn.Module, ABC):
 
         torch_rng_state = checkpoint.get("torch_rng_state")
         if torch_rng_state is not None:
-            torch.set_rng_state(torch_rng_state)
+            torch.set_rng_state(torch_rng_state.cpu())
 
         cuda_rng_state_all = checkpoint.get("cuda_rng_state_all")
         if cuda_rng_state_all is not None and torch.cuda.is_available():
-            torch.cuda.set_rng_state_all(cuda_rng_state_all)
+            cuda_rng_state_all = [
+                rng_state.detach().cpu().to(dtype=torch.uint8)
+                for rng_state in cuda_rng_state_all[:torch.cuda.device_count()]
+            ]
+
+            if cuda_rng_state_all:
+                torch.cuda.set_rng_state_all(cuda_rng_state_all)
 
     def set_seed(self, seed: int = 42) -> None:
         """
