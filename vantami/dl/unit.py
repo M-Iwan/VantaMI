@@ -306,8 +306,9 @@ class MMUnit(nn.Module, ABC):
         if per_task:
             for task_index, task_loss in enumerate(loss["Task"]):
                 add_record(f"Task_{task_index}", "loss", task_loss)
-            for metric, value in metrics.get("Total", {}).items():
-                add_record("Total", metric, value)
+            for task, task_metrics in metrics.get("Task", {}).items():
+                for metric, value in task_metrics.items():
+                    add_record(task, metric, value)
 
         if per_group:
             for group, group_loss in loss.get("Group", {}).items():
@@ -335,7 +336,8 @@ class MMUnit(nn.Module, ABC):
 
         if "Group" in loss_summary:
             detached["Group"] = {
-                tag: tuple(value.detach() for value in values) for tag, values in loss_summary["Group"].items()
+                tag: tuple(value.detach().cpu() for value in values)
+                for tag, values in loss_summary["Group"].items()
             }
 
         return detached
@@ -503,9 +505,9 @@ class MMUnit(nn.Module, ABC):
 
         return self._summarise_epoch(batch_losses, epoch_data, per_task=per_task)
 
-    def fit(self, dataloader: Iterable[dict], n_epochs: int = 64, early_stop: int | None = 8,
-            save_freq: int | None = 8, save_dir: Path | str | None = None, full_metrics: bool = False,
-            per_task: bool = False, per_group: bool = False):
+    def fit(self, train_dataloader: Iterable[dict], train_eval_dataloader: Iterable[dict], n_epochs: int = 64,
+            early_stop: int | None = 8, save_freq: int | None = 8, save_dir: Path | str | None = None,
+            full_metrics: bool = False, per_task: bool = False, per_group: bool = False):
         """
         Train the model using training loss for early stopping.
         """
@@ -556,26 +558,43 @@ class MMUnit(nn.Module, ABC):
             self.log(f"Starting training epoch {epoch_number}/{end_epoch}.", level=1)
 
             train_loss, train_metrics, train_grad_norms = self.fit_epoch(
-                dataloader, full_metrics=full_metrics, per_task=per_task
+                dataloader=train_dataloader, full_metrics=full_metrics, per_task=per_task
+            )
+            train_eval_loss, train_eval_metrics = self.eval_epoch(
+                dataloader=train_eval_dataloader, full_metrics=full_metrics, per_task=per_task
             )
 
-            self.logs["train_loss"].append((epoch_number, train_loss))
-            self.logs["train_metrics"].append((epoch_number, train_metrics))
-            self.logs["train_grad_norms"].append((epoch_number, train_grad_norms))
+            self.logs["optim_loss"].append((epoch_number, train_loss))
+            self.logs["optim_metrics"].append((epoch_number, train_metrics))
+            self.logs["optim_grad_norms"].append((epoch_number, train_grad_norms))
+
+            self.logs["train_loss"].append((epoch_number, train_eval_loss))
+            self.logs["train_metrics"].append((epoch_number, train_eval_metrics))
+
             self._record_epoch_metrics(
                 epoch_number=epoch_number,
-                phase="training",
+                phase="optimization",
                 loss=train_loss,
                 metrics=train_metrics,
                 gradient_norms=train_grad_norms,
                 per_task=per_task,
                 per_group=per_group,
             )
+            self._record_epoch_metrics(
+                epoch_number=epoch_number,
+                phase="training",
+                loss=train_eval_loss,
+                metrics=train_eval_metrics,
+                gradient_norms=train_grad_norms,
+                per_task=per_task,
+                per_group=per_group,
+            )
 
-            self._step_scheduler(train_loss["Total"])
+            self._step_scheduler(train_eval_loss["Total"])
 
-            current_loss = train_loss["Total"]
+            current_loss = train_eval_loss["Total"]
 
+            self.log(f"Epoch {epoch_number} optimization loss: {train_loss['Total']:.5f}", level=1)
             self.log(f"Epoch {epoch_number} train loss: {current_loss:.5f}", level=1)
             self.epoch = epoch_number + 1
 
@@ -628,10 +647,10 @@ class MMUnit(nn.Module, ABC):
 
         self.log("Training completed.", level=1)
 
-    def fit_eval(self, train_dataloader: Iterable[dict], eval_dataloader: Iterable[dict], n_epochs: int = 64,
-                 early_stop: int | None = 8, save_freq: int | None = 8, save_dir: Path | str | None = None,
-                 train_full_metrics: bool = False, eval_full_metrics: bool = True, per_task: bool = False,
-                 per_group: bool = False):
+    def fit_eval(self, train_dataloader: Iterable[dict], train_eval_dataloader: Iterable[dict],
+                 eval_dataloader: Iterable[dict], n_epochs: int = 64, early_stop: int | None = 8,
+                 save_freq: int | None = 8, save_dir: Path | str | None = None, train_full_metrics: bool = False,
+                 eval_full_metrics: bool = True, per_task: bool = False, per_group: bool = False):
         """
         Train and evaluate the model, using evaluation loss for early stopping.
         """
@@ -684,26 +703,45 @@ class MMUnit(nn.Module, ABC):
             train_loss, train_metrics, train_grad_norms = self.fit_epoch(
                 train_dataloader, full_metrics=train_full_metrics, per_task=per_task
             )
+
+            train_eval_loss, train_eval_metrics = self.eval_epoch(
+                dataloader=train_eval_dataloader, full_metrics=eval_full_metrics, per_task=per_task
+            )
+
             eval_loss, eval_metrics = self.eval_epoch(
                 eval_dataloader, full_metrics=eval_full_metrics, per_task=per_task
             )
 
             self._step_scheduler(eval_loss["Total"])
 
-            self.logs["train_loss"].append((epoch_number, train_loss))
-            self.logs["train_metrics"].append((epoch_number, train_metrics))
-            self.logs["train_grad_norms"].append((epoch_number, train_grad_norms))
+            self.logs["optim_loss"].append((epoch_number, train_loss))
+            self.logs["optim_metrics"].append((epoch_number, train_metrics))
+            self.logs["optim_grad_norms"].append((epoch_number, train_grad_norms))
+
+            self.logs["train_loss"].append((epoch_number, train_eval_loss))
+            self.logs["train_metrics"].append((epoch_number, train_eval_metrics))
+
             self.logs["eval_loss"].append((epoch_number, eval_loss))
             self.logs["eval_metrics"].append((epoch_number, eval_metrics))
+
             self._record_epoch_metrics(
                 epoch_number=epoch_number,
-                phase="training",
+                phase="optimization",
                 loss=train_loss,
                 metrics=train_metrics,
                 gradient_norms=train_grad_norms,
                 per_task=per_task,
                 per_group=per_group,
             )
+            self._record_epoch_metrics(
+                epoch_number=epoch_number,
+                phase="training",
+                loss=train_eval_loss,
+                metrics=train_eval_metrics,
+                per_task=per_task,
+                per_group=per_group,
+            )
+
             self._record_epoch_metrics(
                 epoch_number=epoch_number,
                 phase="validation",
@@ -714,7 +752,8 @@ class MMUnit(nn.Module, ABC):
             )
             current_loss = eval_loss["Total"]
 
-            self.log(f"Epoch {epoch_number} train loss: {train_loss['Total']:.5f}", level=1)
+            self.log(f"Epoch {epoch_number} optimization loss: {train_loss['Total']:.5f}", level=1)
+            self.log(f"Epoch {epoch_number} train loss: {train_eval_loss['Total']:.5f}", level=1)
             self.log(f"Epoch {epoch_number} evaluation loss: {current_loss:.5f}", level=1)
             self.epoch = epoch_number + 1
 
@@ -970,14 +1009,14 @@ class MMUnit(nn.Module, ABC):
         )
 
         normalized_loss: LossSummary = {
-            "Total": rts(normalized_total.item(), n=5),
-            "Task": rts(normalized_task.detach().cpu().numpy(), n=5),
+            "Total": normalized_total.item(),
+            "Task": normalized_task.detach().cpu().numpy()
         }
 
         group_losses = weighted_loss.get("Group")
         if group_losses:
             normalized_loss["Group"] = {
-                tag: rts(loss_sum.div(weight_sum).item(), n=5) if weight_sum.item() > 0.0 else 0.0
+                tag: loss_sum.div(weight_sum).item() if weight_sum.item() > 0.0 else 0.0
                 for tag, (loss_sum, weight_sum) in group_losses.items()
             }
 
