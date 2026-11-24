@@ -27,18 +27,22 @@ def _to_murcko(smiles: str, generic: bool, mod):
     """
     Convert a single SMILES to Murcko scaffold.
     """
-    if (mol := _to_mol(smiles)) is None:
-        print(f"Unable to construct valid molecule from {smiles}")
+    try:
+        if (mol := _to_mol(smiles)) is None:
+            print(f"Unable to construct valid molecule from {smiles}")
+            return None
+
+        scaffold = mod.GetScaffoldForMol(mol)
+
+        if generic:
+            scaffold = mod.MakeScaffoldGeneric(scaffold)
+
+        scaffold = Chem.MolToSmiles(scaffold)
+
+        return None if scaffold == "" else scaffold
+    except Exception as exc:
+        print(f"Unable to process < {smiles} >:\n{exc}")
         return None
-
-    scaffold = mod.GetScaffoldForMol(mol)
-
-    if generic:
-        scaffold = mod.MakeScaffoldGeneric(scaffold)
-
-    scaffold = Chem.MolToSmiles(scaffold)
-
-    return None if scaffold == "" else scaffold
 
 
 def smiles_2_murcko(smiles: str | Iterable[str], generic: bool = False):
@@ -121,11 +125,15 @@ def _to_inchi(smiles: str):
     """
     Convert a single SMILES to InChI.
     """
-    if (mol := _to_mol(smiles)) is None:
-        print(f"Unable to construct valid molecule from {smiles}")
-        return None
+    try:
+        if (mol := _to_mol(smiles)) is None:
+            print(f"Unable to construct valid molecule from {smiles}")
+            return None
 
-    return Chem.MolToInchi(mol)
+        return Chem.MolToInchi(mol)
+    except Exception as exc:
+        print(f"Unable to process < {smiles} >:\n{exc}")
+        return None
 
 
 def smiles_2_inchi(smiles: str | Iterable[str]):
@@ -203,11 +211,15 @@ def _to_inchi_key(smiles: str):
     """
     Convert a single SMILES to InChIKey.
     """
-    if (mol := _to_mol(smiles)) is None:
-        print(f"Unable to construct valid molecule from {smiles}")
-        return None
+    try:
+        if (mol := _to_mol(smiles)) is None:
+            print(f"Unable to construct valid molecule from {smiles}")
+            return None
 
-    return Chem.MolToInchiKey(mol)
+        return Chem.MolToInchiKey(mol)
+    except Exception as exc:
+        print(f"Unable to process < {smiles} >:\n{exc}")
+        return None
 
 
 def smiles_2_inchi_key(smiles: str | Iterable[str]):
@@ -284,16 +296,20 @@ def _to_fp(smiles: str, generator, count: bool):
     """
     Convert a single SMILES to a (Count) Extended Connectivity / Daylight / AtomPairs Fingerprint
     """
-    if (mol := _to_mol(smiles)) is None:
-        print(f"Unable to construct valid molecule from {smiles}")
+    try:
+        if (mol := _to_mol(smiles)) is None:
+            print(f"Unable to construct valid molecule from {smiles}")
+            return None
+
+        if count:
+            fp = np.asarray(generator.GetCountFingerprintAsNumPy(mol), dtype=np.uint32)
+        else:
+            fp = np.asarray(generator.GetFingerprintAsNumPy(mol), dtype=np.uint8)
+
+        return fp
+    except Exception as exc:
+        print(f"Unable to process < {smiles} >:\n{exc}")
         return None
-
-    if count:
-        fp = np.asarray(generator.GetCountFingerprintAsNumPy(mol), dtype=np.uint32)
-    else:
-        fp = np.asarray(generator.GetFingerprintAsNumPy(mol), dtype=np.uint8)
-
-    return fp
 
 
 def smiles_2_ecfp(smiles: str | Iterable[str], radius: int = 2, nbits: int = 1024, count: bool = False):
@@ -606,11 +622,15 @@ def _to_maccs(smiles: str, mod):
     """
     Convert a single SMILES to MACCS fingerprint.
     """
-    if (mol := _to_mol(smiles)) is None:
-        print(f"Unable to construct valid molecule from {smiles}")
-        return None
+    try:
+        if (mol := _to_mol(smiles)) is None:
+            print(f"Unable to construct valid molecule from {smiles}")
+            return None
 
-    return np.array(mod.GetMACCSKeysFingerprint(mol), dtype=np.uint8)
+        return np.array(mod.GetMACCSKeysFingerprint(mol), dtype=np.uint8)
+    except Exception as exc:
+        print(f"Unable to process < {smiles} >:\n{exc}")
+        return None
 
 
 def smiles_2_maccs(smiles: str | Iterable[str]):
@@ -698,11 +718,15 @@ def _fp_from_smarts(smiles: str, smarts: List):
     """
     Convert a single SMILES to fingerprint based on SMARTS patterns matching.
     """
-    if (mol := _to_mol(smiles)) is None:
-        print(f"Unable to construct valid molecule from {smiles}")
-        return None
+    try:
+        if (mol := _to_mol(smiles)) is None:
+            print(f"Unable to construct valid molecule from {smiles}")
+            return None
 
-    return np.array([1 if mol.HasSubstructMatch(sm) else 0 for sm in smarts], dtype=np.uint8)
+        return np.array([1 if mol.HasSubstructMatch(sm) else 0 for sm in smarts], dtype=np.uint8)
+    except Exception as exc:
+        print(f"Unable to process < {smiles} >:\n{exc}")
+        return None
 
 
 def smiles_2_klek(smiles: str | Iterable[str]):
@@ -793,19 +817,23 @@ def dataframe_2_klek(df: pl.DataFrame, smiles_col: str = "SMILES", output_col: s
     return df
 
 
-def _to_rdkit(smiles: str, decimals: int, mod):
+def _to_rdkit(smiles: str, mod):
     """
     Convert a single SMILES to RDKit physicochemical descriptors.
     """
-    if (mol := _to_mol(smiles)) is None:
-        print(f"Unable to construct valid molecule from {smiles}")
+    try:
+        if (mol := _to_mol(smiles)) is None:
+            print(f"Unable to construct valid molecule from {smiles}")
+            return None
+
+        desc = mod.CalcMolDescriptors(mol, silent=False, missingVal=np.nan).values()
+        return np.fromiter(desc, dtype=np.float64)
+    except Exception as exc:
+        print(f"Unable to process < {smiles} >:\n{exc}")
         return None
 
-    desc = mod.CalcMolDescriptors(mol, silent=False, missingVal=np.nan).values()
-    return np.round(np.fromiter(desc, dtype=np.float64), decimals)
 
-
-def smiles_2_rdkit(smiles: str | Iterable[str], decimals: int = 5):
+def smiles_2_rdkit(smiles: str | Iterable[str]):
     """
     Convert SMILES to RDKit descriptors.
 
@@ -813,8 +841,6 @@ def smiles_2_rdkit(smiles: str | Iterable[str], decimals: int = 5):
     ----------
     smiles: str | Iterable[str]
         A SMILES or list of SMILES strings.
-    decimals: int
-        Number of decimals to keep.
 
     Returns
     -------
@@ -826,17 +852,17 @@ def smiles_2_rdkit(smiles: str | Iterable[str], decimals: int = 5):
         raise ImportError(f"Function < smiles_2_rdkit > requires RDKit:\n{exc}")
 
     if isinstance(smiles, str):
-        return _to_rdkit(smiles=smiles, decimals=decimals, mod=Descriptors)
+        return _to_rdkit(smiles=smiles, mod=Descriptors)
 
     elif isinstance(smiles, (list, np.ndarray)):
-        return [_to_rdkit(smiles=smi, decimals=decimals, mod=Descriptors) for smi in smiles]
+        return [_to_rdkit(smiles=smi, mod=Descriptors) for smi in smiles]
 
     else:
         raise TypeError(f"Expected smiles to be str, List[str] or npt.NDArray[str], got {type(smiles)} instead")
 
 
 def dataframe_2_rdkit(df: pl.DataFrame, smiles_col: str = "SMILES", output_col: str = "RDKit",
-                      decimals: int = 5, n_jobs: int = 1, batch_size: int = 512, timeout: int | None = None):
+                      n_jobs: int = 1, batch_size: int = 512, timeout: int | None = None):
     """
     Convert SMILES in a DataFrame to RDKit descriptors.
 
@@ -848,8 +874,6 @@ def dataframe_2_rdkit(df: pl.DataFrame, smiles_col: str = "SMILES", output_col: 
         Name of column with SMILES.
     output_col: str, optional
         Name of column for the output.
-    decimals: int
-        Number of decimals to keep.
     n_jobs: int, optional
         Number of cores to use for calculations.
     batch_size: int, optional
@@ -870,7 +894,7 @@ def dataframe_2_rdkit(df: pl.DataFrame, smiles_col: str = "SMILES", output_col: 
         return df.with_columns(pl.lit(None).alias(output_col))
 
     out = Parallel(n_jobs=n_jobs, verbose=1, timeout=timeout, backend="loky")(
-        delayed(smiles_2_rdkit)(smiles=smi, decimals=decimals) for smi in smiles_batches
+        delayed(smiles_2_rdkit)(smiles=smi) for smi in smiles_batches
     )
 
     smiles_df = pl.DataFrame(
@@ -889,31 +913,35 @@ def dataframe_2_rdkit(df: pl.DataFrame, smiles_col: str = "SMILES", output_col: 
     return df
 
 
-def _to_common_rdkit(smiles: str, decimals: int, mod):
+def _to_common_rdkit(smiles: str, mod):
     """
     Convert a single SMILES to selected RDKit physicochemical descriptors.
     """
-    keys = ["MolWt", "LogP", "MolMR", "NHeavy", "NHetero", "NHBA", "NHBD", "NRotBonds", "NRings", "TPSA"]
-    if (mol := _to_mol(smiles)) is None:
-        print(f"Unable to construct valid molecule from {smiles}")
-        return {key: None for key in keys}
+    try:
+        keys = ["MolWt", "LogP", "MolMR", "NHeavy", "NHetero", "NHBA", "NHBD", "NRotBonds", "NRings", "TPSA"]
+        if (mol := _to_mol(smiles)) is None:
+            print(f"Unable to construct valid molecule from {smiles}")
+            return {key: None for key in keys}
 
-    crippen = mod.CalcCrippenDescriptors(mol)
-    return {
-        "MolWt": np.round(mod.CalcExactMolWt(mol), decimals),
-        "LogP": np.round(crippen[0], decimals),
-        "MolMR": np.round(crippen[1], decimals),
-        "NHeavy": mod.CalcNumHeavyAtoms(mol),
-        "NHetero": mod.CalcNumHeteroatoms(mol),
-        "NHBA": mod.CalcNumHBA(mol),
-        "NHBD": mod.CalcNumHBD(mol),
-        "NRotBonds": mod.CalcNumRotatableBonds(mol),
-        "NRings": mod.CalcNumRings(mol),
-        "TPSA": np.round(mod.CalcTPSA(mol), decimals),
-    }
+        crippen = mod.CalcCrippenDescriptors(mol)
+        return {
+            "MolWt": mod.CalcExactMolWt(mol),
+            "LogP": crippen[0],
+            "MolMR": crippen[1],
+            "NHeavy": mod.CalcNumHeavyAtoms(mol),
+            "NHetero": mod.CalcNumHeteroatoms(mol),
+            "NHBA": mod.CalcNumHBA(mol),
+            "NHBD": mod.CalcNumHBD(mol),
+            "NRotBonds": mod.CalcNumRotatableBonds(mol),
+            "NRings": mod.CalcNumRings(mol),
+            "TPSA": mod.CalcTPSA(mol),
+        }
+    except Exception as exc:
+        print(f"Unable to process < {smiles} >:\n{exc}")
+        return None
 
 
-def smiles_2_common_rdkit(smiles: str | Iterable[str], decimals: int = 5):
+def smiles_2_common_rdkit(smiles: str | Iterable[str]):
     """
     Convert SMILES to common RDKit descriptors.
 
@@ -921,8 +949,6 @@ def smiles_2_common_rdkit(smiles: str | Iterable[str], decimals: int = 5):
     ----------
     smiles: str | Iterable[str]
         A SMILES or list of SMILES strings.
-    decimals: int
-        Number of decimals to keep.
 
     Returns
     -------
@@ -936,17 +962,17 @@ def smiles_2_common_rdkit(smiles: str | Iterable[str], decimals: int = 5):
         raise ImportError(f"Function < smiles_2_common_rdkit > requires RDKit:\n{exc}")
 
     if isinstance(smiles, str):
-        return _to_common_rdkit(smiles=smiles, decimals=decimals, mod=rdMolDescriptors)
+        return _to_common_rdkit(smiles=smiles, mod=rdMolDescriptors)
 
     elif isinstance(smiles, (list, np.ndarray)):
-        return [_to_common_rdkit(smiles=smi, decimals=decimals, mod=rdMolDescriptors) for smi in smiles]
+        return [_to_common_rdkit(smiles=smi, mod=rdMolDescriptors) for smi in smiles]
 
     else:
         raise TypeError(f"Expected smiles to be str, List[str] or npt.NDArray[str], got {type(smiles)} instead")
 
 
-def dataframe_2_common_rdkit(df: pl.DataFrame, smiles_col: str = "SMILES", decimals: int = 5,
-                             n_jobs: int = 1, batch_size: int = 512, timeout: int | None = None):
+def dataframe_2_common_rdkit(df: pl.DataFrame, smiles_col: str = "SMILES", n_jobs: int = 1, batch_size: int = 512,
+                             timeout: int | None = None):
     """
     Convert SMILES in a DataFrame to common RDKit descriptors.
 
@@ -956,8 +982,6 @@ def dataframe_2_common_rdkit(df: pl.DataFrame, smiles_col: str = "SMILES", decim
         A polars DataFrame with data.
     smiles_col: str, optional
         Name of column with SMILES.
-    decimals: int
-        Number of decimals to keep.
     n_jobs: int, optional
         Number of cores to use for calculations.
     batch_size: int, optional
@@ -981,7 +1005,7 @@ def dataframe_2_common_rdkit(df: pl.DataFrame, smiles_col: str = "SMILES", decim
         return df.with_columns([pl.lit(None).alias(o_col) for o_col in keys])
 
     out_batches = Parallel(n_jobs=n_jobs, verbose=1, timeout=timeout, backend="loky")(
-        delayed(smiles_2_common_rdkit)(smiles=smi, decimals=decimals) for smi in smiles_batches
+        delayed(smiles_2_common_rdkit)(smiles=smi) for smi in smiles_batches
     )
 
     out = list(chain.from_iterable(out_batches))
@@ -996,24 +1020,26 @@ def dataframe_2_common_rdkit(df: pl.DataFrame, smiles_col: str = "SMILES", decim
     return df
 
 
-def _from_hf(smiles: str, model, tokenizer, torch, decimals):
+def _from_hf(smiles: str, model, tokenizer, torch):
     """
     Convert a single SMILES to embeddings from HuggingFace models.
     """
-    tokens = tokenizer(smiles, return_tensors="pt", padding=True, truncation=True, max_length=1024)
-    with torch.no_grad():
-        emb = model(**tokens).last_hidden_state.mean(dim=1).squeeze().numpy().reshape(-1)
-    return np.round(emb, decimals)
+    try:
+        tokens = tokenizer(smiles, return_tensors="pt", padding=True, truncation=True, max_length=1024)
+        with torch.no_grad():
+            emb = model(**tokens).last_hidden_state.mean(dim=1).squeeze().numpy().reshape(-1)
+        return emb
+    except Exception as exc:
+        print(f"Unable to process < {smiles} >:\n{exc}")
+        return None
 
 
-def smiles_2_chemberta(smiles: str | Iterable[str], decimals: int = 5):
+def smiles_2_chemberta(smiles: str | Iterable[str]):
     """
     Parameters
     ----------
     smiles: str | Iterable[str]
         A valid SMILES or list of valid SMILES strings.
-    decimals: int
-        Number of decimals to keep.
 
     Returns
     -------
@@ -1050,17 +1076,17 @@ def smiles_2_chemberta(smiles: str | Iterable[str], decimals: int = 5):
     tokenizer = joblib.load(tokenizer_path)
 
     if isinstance(smiles, str):
-        return _from_hf(smiles=smiles, model=model, tokenizer=tokenizer, torch=torch, decimals=decimals)
+        return _from_hf(smiles=smiles, model=model, tokenizer=tokenizer, torch=torch)
 
     elif isinstance(smiles, (list, np.ndarray)):
-        return [_from_hf(smiles=smi, model=model, tokenizer=tokenizer, torch=torch, decimals=decimals) for smi in smiles]
+        return [_from_hf(smiles=smi, model=model, tokenizer=tokenizer, torch=torch) for smi in smiles]
 
     else:
         raise TypeError(f"Expected smiles to be str, List[str] or npt.NDArray[str], got {type(smiles)} instead")
 
 
 def dataframe_2_chemberta(df: pl.DataFrame, smiles_col: str = "SMILES", output_col: str = "ChemBERTa",
-                          decimals: int = 5, n_jobs: int = 1, batch_size: int = 512, timeout: int | None = None):
+                          n_jobs: int = 1, batch_size: int = 512, timeout: int | None = None):
     """
     Convert SMILES in a polars DataFrame to ChemBERTa embeddings.
 
@@ -1072,8 +1098,6 @@ def dataframe_2_chemberta(df: pl.DataFrame, smiles_col: str = "SMILES", output_c
         Name of column with SMILES.
     output_col: str, optional
         Name of column for the output.
-    decimals: int
-        Number of decimals to keep.
     n_jobs: int, optional
         Number of cores to use for calculations.
     batch_size: int, optional
@@ -1108,7 +1132,7 @@ def dataframe_2_chemberta(df: pl.DataFrame, smiles_col: str = "SMILES", output_c
         return df.with_columns(pl.lit(None).alias(output_col))
 
     out = Parallel(n_jobs=n_jobs, verbose=1, timeout=timeout, backend="loky")(
-        delayed(smiles_2_chemberta)(smiles=smi, decimals=decimals) for smi in smiles_batches
+        delayed(smiles_2_chemberta)(smiles=smi) for smi in smiles_batches
     )
 
     smiles_df = pl.DataFrame(
@@ -1150,14 +1174,12 @@ def get_chemberta():
     }
 
 
-def smiles_2_molencoder(smiles: str | Iterable[str], decimals: int = 5):
+def smiles_2_molencoder(smiles: str | Iterable[str]):
     """
     Parameters
     ----------
     smiles: str | Iterable[str]
         A valid SMILES or list of valid SMILES strings.
-    decimals: int
-        Number of decimals to keep.
 
     Returns
     -------
@@ -1194,17 +1216,17 @@ def smiles_2_molencoder(smiles: str | Iterable[str], decimals: int = 5):
     tokenizer = joblib.load(tokenizer_path)
 
     if isinstance(smiles, str):
-        return _from_hf(smiles=smiles, model=model, tokenizer=tokenizer, torch=torch, decimals=decimals)
+        return _from_hf(smiles=smiles, model=model, tokenizer=tokenizer, torch=torch)
 
     elif isinstance(smiles, (list, np.ndarray)):
-        return [_from_hf(smiles=smi, model=model, tokenizer=tokenizer, torch=torch, decimals=decimals) for smi in smiles]
+        return [_from_hf(smiles=smi, model=model, tokenizer=tokenizer, torch=torch) for smi in smiles]
 
     else:
         raise TypeError(f"Expected smiles to be str, List[str] or npt.NDArray[str], got {type(smiles)} instead")
 
 
 def dataframe_2_molencoder(df: pl.DataFrame, smiles_col: str = "SMILES", output_col: str = "MolEncoder",
-                           decimals: int = 5, n_jobs: int = 1, batch_size: int = 512, timeout: int | None = None ):
+                           n_jobs: int = 1, batch_size: int = 512, timeout: int | None = None ):
     """
     Convert SMILES in a polars DataFrame to MolEncoder embeddings.
 
@@ -1216,8 +1238,6 @@ def dataframe_2_molencoder(df: pl.DataFrame, smiles_col: str = "SMILES", output_
         Name of column with SMILES.
     output_col: str, optional
         Name of column for the output.
-    decimals: int
-        Number of decimals to keep.
     n_jobs: int, optional
         Number of cores to use for calculations.
     batch_size: int, optional
@@ -1252,7 +1272,7 @@ def dataframe_2_molencoder(df: pl.DataFrame, smiles_col: str = "SMILES", output_
         return df.with_columns(pl.lit(None).alias(output_col))
 
     out = Parallel(n_jobs=n_jobs, verbose=1, timeout=timeout, backend="loky")(
-        delayed(smiles_2_molencoder)(smiles=smi, decimals=decimals) for smi in smiles_batches
+        delayed(smiles_2_molencoder)(smiles=smi) for smi in smiles_batches
     )
 
     smiles_df = pl.DataFrame(
@@ -1300,11 +1320,15 @@ def _to_mapc(smiles: str, radius: int, nbits: int, fn):
     """
     Convert a single SMILES to MAPC descriptors.
     """
-    if (mol := _to_mol(smiles)) is None:
-        print(f"Unable to construct valid molecule from {smiles}")
-        return None
+    try:
+        if (mol := _to_mol(smiles)) is None:
+            print(f"Unable to construct valid molecule from {smiles}")
+            return None
 
-    return fn(mol, max_radius=radius, n_permutations=nbits)
+        return fn(mol, max_radius=radius, n_permutations=nbits)
+    except Exception as exc:
+        print(f"Unable to process < {smiles} >:\n{exc}")
+        return None
 
 
 def smiles_2_mapc(smiles: str | Iterable[str], radius: int = 2, nbits: int = 1024):
@@ -1407,32 +1431,48 @@ def dataframe_2_mapc(df: pl.DataFrame, smiles_col: str = "SMILES", output_col: s
 
 
 def _mordred_to_array(result) -> npt.NDArray:
-    return np.asarray(
-        [float(value) if np.isscalar(value) else np.nan for value in result],
-        dtype=np.float64
-    )
+    """
+    Conver Mordred descriptors to numpy array
+    """
+    try:
+        return np.asarray(
+            [float(value) if np.isscalar(value) else np.nan for value in result],
+            dtype=np.float64
+        )
+    except Exception as exc:
+        print(f"Unable to cast Mordred descriptors to array: \n{exc}")
+        return None
 
 
 def _to_mordred_2D(smiles: str, calc):
     """
     Convert a single SMILES to 2D Mordred descriptors.
     """
-    if (mol := _to_mol(smiles)) is None:
-        print(f"Unable to construct valid molecule from {smiles}")
-        return None
+    try:
+        if (mol := _to_mol(smiles)) is None:
+            print(f"Unable to construct valid molecule from {smiles}")
+            return None
 
-    return _mordred_to_array(calc(mol))
+        return _mordred_to_array(calc(mol))
+    except Exception as exc:
+        print(f"Unable to process < {smiles} >:\n{exc}")
+        return None
 
 
 def _to_mordred_3D(mol: Chem.Mol, calc):
     """
     Convert a single RDKit Mol to 3D Mordred descriptors.
     """
-    if mol.GetNumConformers() == 0:
-        warnings.warn(f"3D Mordred descriptors require at least one conformer with 3D coordinates. "
-                      f"Found None for {Chem.MolToSmiles(mol)}")
-        return np.array([np.nan] * 1826)
-    return _mordred_to_array(calc(mol))
+    try:
+        if mol.GetNumConformers() == 0:
+            warnings.warn(
+                f"3D Mordred descriptors require at least one valid conformer. Found None for {Chem.MolToSmiles(mol)}"
+            )
+            return np.array([np.nan] * 1826)
+        return _mordred_to_array(calc(mol))
+    except Exception as exc:
+        print(f"Unable to process RDKit mol:\n{exc}")
+        return None
 
 
 def smiles_2_mordred(smiles: str | Iterable[str]):
@@ -1593,8 +1633,7 @@ def dataframe_2_mordred(df: pl.DataFrame, smiles_col: str = "SMILES", mol_col: s
 # ============ #
 
 
-def dataframe_2_cddd(df, cddd_paths: str, smiles_col: str = "SMILES",
-                     descriptor_col: str = "CDDD", n_cpus: int = 4, decimals: int = 5):
+def dataframe_2_cddd(df, cddd_paths: str, smiles_col: str = "SMILES", descriptor_col: str = "CDDD", n_cpus: int = 4):
     """
     Convert SMILES in a DataFrame to CDDD descriptors.
     TODO: This already
@@ -1611,8 +1650,6 @@ def dataframe_2_cddd(df, cddd_paths: str, smiles_col: str = "SMILES",
         Name of column to which add calculated descriptors.
     n_cpus: int
         Number of CPUs to use during processing
-    decimals: int
-        Number of decimals to keep.
 
     Returns
     -------
@@ -1625,13 +1662,13 @@ def dataframe_2_cddd(df, cddd_paths: str, smiles_col: str = "SMILES",
     except ImportError as exc:
         raise ImportError(f"Error during import:\n{exc}")
 
-    def postprocess(entry, decimals_):
+    def postprocess(entry):
         if not isinstance(entry, (np.ndarray, list)):
             return np.nan
         if isinstance(entry, np.ndarray):
-            return np.round(entry.reshape(-1), decimals_)
+            return entry.reshape(-1)
         if isinstance(entry, list):
-            return [np.round(array.reshape(-1), decimals_) for array in entry]
+            return [array.reshape(-1) for array in entry]
         else:
             raise TypeError(f"Expected numpy array or list, got {type(entry)} instead.")
 
@@ -1651,7 +1688,7 @@ def dataframe_2_cddd(df, cddd_paths: str, smiles_col: str = "SMILES",
     subprocess.run(command)
 
     df = joblib.load(paths["output"])
-    df.loc[:, descriptor_col] = df[descriptor_col].apply(postprocess, decimals_=decimals)
+    df.loc[:, descriptor_col] = df[descriptor_col].apply(postprocess)
 
     if is_polars:
         df = pl.from_pandas(df)

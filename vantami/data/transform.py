@@ -1,6 +1,6 @@
 import re
 from math import floor
-from typing import List
+from typing import List, Any, Dict
 import warnings
 
 import numpy as np
@@ -825,6 +825,73 @@ def get_transformer_params(features: str):
         ) from exc
 
     return params
+
+
+def one_of_k_encoding(value: Any, val_2_idx: Dict[Any, int]):
+    """
+    Encode a value as numpy array
+
+    Parameters
+    ----------
+    value: Any
+        Value to encode
+    val_2_idx: Dict[Any, int]
+        Encoding of values to their positions
+
+    Returns
+    -------
+    npt.NDArray[np.int64]
+    """
+    array = np.zeros(shape=len(val_2_idx), dtype=np.int64)
+
+    if value not in val_2_idx.keys() or value is None:
+        return array
+
+    array[val_2_idx[value]] = 1
+    return array
+
+
+def one_hot_encode_df(df: pl.DataFrame, input_col: str, output_col: str):
+    """
+    One hot encode categorical features as numpy arrays. `None` values are treated as redundant values and
+    encoded as all-zeroes.
+
+    Parameters
+    ----------
+    df: pl.DataFrame
+        Polars dataframe with arrays to encode
+    input_col: str
+        Name of the column with features to encode
+    output_col: str
+        Name of the column with encoded values.
+
+    Returns
+    -------
+    pl.DataFrame, dict[str, int]
+    """
+    if input_col not in df.columns:
+        raise ValueError(f"Column {input_col} not found in dataframe")
+
+    if output_col in df.columns:
+        warnings.warn(f"Overwriting column {output_col}", UserWarning, stacklevel=2)
+
+    unique_values = sorted(df[input_col].drop_nulls().unique())
+    if not unique_values:
+        values = [np.zeros(shape=1, dtype=np.int64)] * len(df)
+        return df.with_columns(
+            pl.Series(name=output_col, values=values, dtype=pl.Array(pl.Int64, shape=1))
+        )
+
+    val_2_idx = {value: idx for idx, value in enumerate(unique_values)}
+
+    df = df.with_columns(
+        pl.col(input_col).map_elements(
+            lambda value: one_of_k_encoding(value, val_2_idx=val_2_idx),
+            return_dtype=pl.Array(pl.Int64, shape=len(val_2_idx)),
+            skip_nulls=False
+        ).alias(output_col)
+    )
+    return df, val_2_idx
 
 
 def merge_arrays_dataframe(df: pl.DataFrame, input_cols: List[str], output_col: str):

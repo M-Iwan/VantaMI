@@ -9,24 +9,24 @@ import numpy as np
 import numpy.typing as npt
 import polars as pl
 
+from vantami.data.partition import batch_data
 
-def _from_hf(string: str, model, torch, decimals):
+
+def _from_hf(string: str, model, torch):
     """
     Convert a single string to embeddings from HuggingFace models.
     """
     with torch.no_grad():
         emb = model.encode(string, normalize_embeddings=True)
-    return np.round(emb, decimals)
+    return emb
 
 
-def string_2_minilm(string: str | List[str] | npt.NDArray[np.str_], decimals: int = 5):
+def string_2_minilm(string: str | List[str] | npt.NDArray[np.str_]):
     """
     Parameters
     ----------
     string: str | List[str] | npt.NDArray[str]
         An English sentence.
-    decimals: int
-        Number of decimals to keep.
 
     Returns
     -------
@@ -39,7 +39,7 @@ def string_2_minilm(string: str | List[str] | npt.NDArray[np.str_], decimals: in
 
     try:
         from sentence_transformers import SentenceTransformer
-        from vantami.cache import get_minilm_model_path
+        from vantami.paths import get_minilm_model_path
     except ImportError as exc:
         raise ImportError(f"Function < string_2_minilm > requires < sentence_transformers > library:\n{exc}")
 
@@ -54,30 +54,28 @@ def string_2_minilm(string: str | List[str] | npt.NDArray[np.str_], decimals: in
     model.eval()
 
     if isinstance(string, str):
-        return _from_hf(string=string, model=model, torch=torch, decimals=decimals)
+        return _from_hf(string=string, model=model, torch=torch)
 
     elif isinstance(string, (list, np.ndarray)):
-        return [_from_hf(string=st, model=model, torch=torch, decimals=decimals) for st in string]
+        return [_from_hf(string=st, model=model, torch=torch) for st in string]
 
     else:
         raise TypeError(f"Expected string to be str, List[str] or npt.NDArray[str], got {type(string)} instead")
 
 
 def dataframe_2_minilm(df: pl.DataFrame, string_col: str = "String", output_col: str = "MiniLM",
-                       decimals: int = 5, n_jobs: int = 1, batch_size: int = 512, timeout: int | None = None):
+                       n_jobs: int = 1, batch_size: int = 512, timeout: int | None = None):
     """
     Convert strings in a polars DataFrame to MiniLM embeddings.
 
     Parameters
     ----------
-    df : pl.DataFrame
+    df: pl.DataFrame
         A polars DataFrame.
-    string_col : str
+    string_col: str
         Name of column with strings to convert.
-    output_col : str, optional
+    output_col: str, optional
         Name of column for the output.
-    decimals: int
-        Number of decimals to keep.
     n_jobs: int, optional
         Number of cores to use for calculations.
     batch_size: int, optional
@@ -87,15 +85,14 @@ def dataframe_2_minilm(df: pl.DataFrame, string_col: str = "String", output_col:
 
     Returns
     -------
-    df : pl.DataFrame
+    df: pl.DataFrame
         A polars Dataframe with added MiniLM column.
     """
 
     try:
-        from vantami.cache import get_minilm_model_path
-        from vantami.data.descriptors import batch_data
+        from vantami.paths import get_minilm_model_path
     except ImportError as exc:
-        raise ImportError(f"Function < dataframe_2_minilm > requires the MiniLM cache utilities:\n{exc}")
+        raise ImportError(f"Function < dataframe_2_minilm > requires the MiniLM paths utilities:\n{exc}")
 
     if not get_minilm_model_path().is_file():
         get_minilm()
@@ -109,7 +106,7 @@ def dataframe_2_minilm(df: pl.DataFrame, string_col: str = "String", output_col:
         return df.with_columns(pl.lit(None).alias(output_col))
 
     out = Parallel(n_jobs=n_jobs, verbose=1, timeout=timeout, backend="loky")(
-        delayed(string_2_minilm)(string=st, decimals=decimals) for st in string_batches
+        delayed(string_2_minilm)(string=st) for st in string_batches
     )
 
     string_df = pl.DataFrame(
@@ -135,7 +132,7 @@ def get_minilm():
     try:
         import truststore
         from sentence_transformers import SentenceTransformer
-        from vantami.cache import get_minilm_model_path
+        from vantami.paths import get_minilm_model_path
     except ImportError as exc:
         raise ImportError(f"Function < get_minilm > requires sentence_transformers and truststore libraries:\n{exc}")
 
@@ -149,14 +146,12 @@ def get_minilm():
     }
 
 
-def string_2_qwen3(string:str | List[str] | npt.NDArray[np.str_], decimals: int = 5):
+def string_2_qwen3(string:str | List[str] | npt.NDArray[np.str_]):
     """
     Parameters
     ----------
     string: str | List[str] | npt.NDArray[str]
         An English sentence.
-    decimals: int
-        Number of decimals to keep.
 
     Returns
     -------
@@ -169,7 +164,7 @@ def string_2_qwen3(string:str | List[str] | npt.NDArray[np.str_], decimals: int 
 
     try:
         from sentence_transformers import SentenceTransformer
-        from vantami.cache import get_qwen3_model_path
+        from vantami.paths import get_qwen3_model_path
     except ImportError as exc:
         raise ImportError(f"Function < string_2_qwen3 > requires < sentence_transformers > library:\n{exc}")
 
@@ -184,30 +179,28 @@ def string_2_qwen3(string:str | List[str] | npt.NDArray[np.str_], decimals: int 
     model.eval()
 
     if isinstance(string, str):
-        return _from_hf(string=string, model=model, torch=torch, decimals=decimals)
+        return _from_hf(string=string, model=model, torch=torch)
 
     elif isinstance(string, (list, np.ndarray)):
-        return [_from_hf(string=st, model=model, torch=torch, decimals=decimals) for st in string]
+        return [_from_hf(string=st, model=model, torch=torch) for st in string]
 
     else:
         raise TypeError(f"Expected string to be str, List[str] or npt.NDArray[str], got {type(string)} instead")
 
 
 def dataframe_2_qwen3(df: pl.DataFrame, string_col: str = "String", output_col: str = "Qwen3",
-                      decimals: int = 5, n_jobs: int = 1, batch_size: int = 256, timeout: int | None = None):
+                      n_jobs: int = 1, batch_size: int = 256, timeout: int | None = None):
     """
     Convert strings in a polars DataFrame to Qwen3 embeddings.
 
     Parameters
     ----------
-    df : pl.DataFrame
+    df: pl.DataFrame
         A polars DataFrame.
-    string_col : str
+    string_col: str
         Name of column with strings to convert.
-    output_col : str, optional
+    output_col: str, optional
         Name of column for the output.
-    decimals: int
-        Number of decimals to keep.
     n_jobs: int, optional
         Number of cores to use for calculations.
     batch_size: int, optional
@@ -217,15 +210,14 @@ def dataframe_2_qwen3(df: pl.DataFrame, string_col: str = "String", output_col: 
 
     Returns
     -------
-    df : pl.DataFrame
+    df: pl.DataFrame
         A polars Dataframe with added Qwen3 column.
     """
 
     try:
-        from vantami.cache import get_qwen3_model_path
-        from vantami.data.descriptors import batch_data
+        from vantami.paths import get_qwen3_model_path
     except ImportError as exc:
-        raise ImportError(f"Function < dataframe_2_qwen3 > requires the Qwen3 cache utilities:\n{exc}")
+        raise ImportError(f"Function < dataframe_2_qwen3 > requires the Qwen3 paths utilities:\n{exc}")
 
     if not get_qwen3_model_path().is_file():
         get_qwen3()
@@ -239,7 +231,7 @@ def dataframe_2_qwen3(df: pl.DataFrame, string_col: str = "String", output_col: 
         return df.with_columns(pl.lit(None).alias(output_col))
 
     out = Parallel(n_jobs=n_jobs, verbose=1, timeout=timeout, backend="loky")(
-        delayed(string_2_qwen3)(string=st, decimals=decimals) for st in string_batches
+        delayed(string_2_qwen3)(string=st) for st in string_batches
     )
 
     string_df = pl.DataFrame(
@@ -265,7 +257,7 @@ def get_qwen3():
     try:
         import truststore
         from sentence_transformers import SentenceTransformer
-        from vantami.cache import get_qwen3_model_path
+        from vantami.paths import get_qwen3_model_path
     except ImportError as exc:
         raise ImportError(f"Function < get_qwen3 > requires sentence_transformers and truststore libraries:\n{exc}")
 

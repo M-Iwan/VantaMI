@@ -1,3 +1,29 @@
+# [0.6.1]: 24-11-2026
+
+[Added]
+
+- Added `one_of_k_encoding` and `one_hot_encode_df` functions to data.transform
+- Added option for `MMUnit` for calculating full sklearn-based performance metrics via `full_metrics` parameter
+- Added more logging options fro `MMUnit`
+- More checks for datatype and shape correctness to `MMUnit`
+
+[Changed]
+
+- Removed `decimals` parameter from all descriptor-calculation related functions
+- Exposed `record_ids` within LMDB for faster initialization
+- Optimized model checkpointing for `MMUnit`: no more double state saves!
+- `MMUnit` now stores best model on disk, instead of GPU VRAM (incredible)
+
+[Removed]
+
+- Removed `decimals` parameter from all descriptor-calculation related functions (`data.descriptors`, `nlp.embedding`)
+- Removed `log_config` from `MMUnit`
+
+[Fixed]
+
+- Fixed early stopping logic for `MMUnit`
+- Fixed modules incorrectly importing `vantami.cache` instead of `vantami.paths`
+
 # [0.6.0]: 16-11-2026
 
 [Added]

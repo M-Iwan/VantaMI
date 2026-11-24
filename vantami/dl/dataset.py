@@ -16,6 +16,7 @@ from typing import Any, Dict, Mapping, Optional, Union
 
 import lmdb
 import numpy as np
+import numpy.typing as npt
 import polars as pl
 
 import torch
@@ -548,6 +549,9 @@ class GraphBatch(dict):
         return cls(**result)
 
 
+_RECORD_IDS_KEY = b"meta/record_ids"
+
+
 class LMDBGraphDataset(Dataset[dict[str, Any]]):
     """
     Read-only map-style dataset for records written by `write_graph_lmdb`.
@@ -588,16 +592,38 @@ class LMDBGraphDataset(Dataset[dict[str, Any]]):
             raise TypeError("LMDB metadata must be a dictionary.")
         return metadata
 
-    def _read_record_ids(self) -> list[int]:
+    def _read_record_ids(self) -> npt.NDArray:
+        """
+        Load the compact record-ID index written by write_graph_lmdb.
+        """
         env = self._open_env()
-        record_ids: list[int] = []
+
         with env.begin(write=False) as txn:
-            with txn.cursor() as cursor:
-                if cursor.set_range(_RECORD_PREFIX):
-                    for key, _ in cursor:
-                        if not key.startswith(_RECORD_PREFIX):
-                            break
-                        record_ids.append(int(key[len(_RECORD_PREFIX):]))
+            raw = txn.get(_RECORD_IDS_KEY)
+
+        if raw is None:
+            raise ValueError(
+                "LMDB does not contain a record-ID index. "
+                "Rebuild or migrate the LMDB with the updated writer."
+            )
+
+        record_ids = _deserialize(raw)
+
+        if not isinstance(record_ids, np.ndarray):
+            raise TypeError("LMDB record-ID index must be a NumPy array.")
+
+        if record_ids.ndim != 1:
+            raise ValueError(
+                "LMDB record-ID index must be one-dimensional, "
+                f"got shape {record_ids.shape}."
+            )
+
+        if record_ids.dtype != np.int64:
+            raise TypeError(
+                "LMDB record-ID index must have dtype int64, "
+                f"got {record_ids.dtype}."
+            )
+
         return record_ids
 
     def _validate_metadata(self) -> None:
@@ -615,9 +641,11 @@ class LMDBGraphDataset(Dataset[dict[str, Any]]):
         return dict(self._metadata)
 
     @property
-    def record_ids(self) -> tuple[int, ...]:
-        """Return record identifiers in deterministic LMDB-key order."""
-        return tuple(self._record_ids)
+    def record_ids(self) -> npt.NDArray:
+        """Return read-only record IDs in deterministic LMDB-key order."""
+        record_ids = self._record_ids.view()
+        record_ids.flags.writeable = False
+        return record_ids
 
     def __len__(self) -> int:
         return len(self._record_ids)
@@ -628,7 +656,7 @@ class LMDBGraphDataset(Dataset[dict[str, Any]]):
         if index < 0 or index >= len(self):
             raise IndexError(f"Dataset index {index} is out of range.")
 
-        record_id = self._record_ids[index]
+        record_id = int(self._record_ids[index])
         with self._open_env().begin(write=False) as txn:
             raw = txn.get(_record_key(record_id))
         if raw is None:

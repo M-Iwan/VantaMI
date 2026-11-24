@@ -16,6 +16,7 @@ from torch_geometric.data import Data
 _SCHEMA_VERSION = 1
 _META_KEY = b"__meta__"
 _RECORD_PREFIX = b"record:"
+_RECORD_IDS_KEY = b"meta/record_ids"
 
 
 def _record_key(record_id: int) -> bytes:
@@ -141,6 +142,7 @@ def write_graph_lmdb(df: pl.DataFrame, lmdb_path: str | Path, *, target_col: str
     )
 
     rejects: list[dict[str, Any]] = []
+    written_record_ids: list[int] = []
     written = 0
     target_size: int | None = None
     graph_fields: set[str] = set()
@@ -185,6 +187,7 @@ def write_graph_lmdb(df: pl.DataFrame, lmdb_path: str | Path, *, target_col: str
 
                 if not txn.put(_record_key(row_record_id), _serialize(payload), overwrite=False):
                     raise KeyError(f"Duplicate LMDB key for record_id={row_record_id}.")
+                written_record_ids.append(row_record_id)
                 graph_fields.update(graph.keys())
                 written += 1
 
@@ -199,9 +202,14 @@ def write_graph_lmdb(df: pl.DataFrame, lmdb_path: str | Path, *, target_col: str
                     "reason": f"{type(exc).__name__}: {exc}",
                 })
 
+        record_ids_array = np.asarray(written_record_ids, dtype=np.int64)
+
         metadata = {
             "schema_version": _SCHEMA_VERSION,
             "num_records": written,
+            "record_id_index_key": _RECORD_IDS_KEY.decode("ascii"),
+            "record_id_index_dtype": "int64",
+            "record_id_index_num_records": int(record_ids_array.size),
             "num_rejected": len(rejects),
             "record_id_column": record_id,
             "target_column": target_col,
@@ -215,8 +223,10 @@ def write_graph_lmdb(df: pl.DataFrame, lmdb_path: str | Path, *, target_col: str
             "graph_attributes_observed": sorted(graph_fields),
             "created_at_utc": datetime.now(timezone.utc).isoformat(),
         }
+        txn.put(_RECORD_IDS_KEY, _serialize(record_ids_array), overwrite=True)
         txn.put(_META_KEY, _serialize(metadata), overwrite=True)
         txn.commit()
+
     except Exception:
         txn.abort()
         raise

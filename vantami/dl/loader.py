@@ -175,7 +175,8 @@ class GraphLoader(DataLoader):
     """
 
     def __init__(self, dataset: LMDBGraphDataset, *, batch_size: int = 256, shuffle: bool = False, num_workers: int = 0,
-                 pin_memory: bool = True, persistent_workers: bool | None = None, **kwargs: Any) -> None:
+                 pin_memory: bool = True, persistent_workers: bool | None = None, prefetch_factor: int = 1,
+                 **kwargs: Any) -> None:
         if not isinstance(dataset, LMDBGraphDataset):
             raise TypeError("dataset must be an LMDBGraphDataset.")
 
@@ -192,5 +193,6 @@ class GraphLoader(DataLoader):
             pin_memory=pin_memory,
             persistent_workers=persistent_workers,
             collate_fn=GraphBatch.collate_fn,
+            prefetch_factor=prefetch_factor,
             **kwargs,
         )

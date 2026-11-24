@@ -81,6 +81,7 @@ class KFoldManager:
     get_non_test_data()
         Get non-test data (features, targets, weights).
     """
+
     def __init__(self, df: pl.DataFrame, smiles_col: str, features_col: str | List[str], target_col: str, fold_col: str,
                  test_fold: int, weights_col: str | None = None, groups_col: str | None = None):
 
