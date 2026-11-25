@@ -12,8 +12,7 @@ from scipy.sparse import coo_array, csr_array
 from rdkit import DataStructs
 from rdkit.DataStructs.cDataStructs import ExplicitBitVect
 
-
-# TODO: Update the conversion functions so that they use multiple CPUs for type conversion
+from vantami.data.partition import batch_data
 
 """
 Supporting functions
@@ -273,15 +272,52 @@ def _sparse_distance_graph(rows: npt.NDArray, cols: npt.NDArray, data: npt.NDArr
     return coo_array((data, (rows, cols)), shape=shape, dtype=np.float64).tocsr()
 
 
-def _as_rdkit_array(values: EmbeddingSequence, metric: str):
+def _rdkit_array_type_flags(values: EmbeddingSequence):
     """
-    Return ExplicitBitVect objects, converting NumPy binary vectors if needed.
+    Determine embedding types in a batch.
+    """
+    return (
+        all(isinstance(value, ExplicitBitVect) for value in values),
+        any(isinstance(value, ExplicitBitVect) for value in values),
+        all(isinstance(value, np.ndarray) for value in values),
+    )
+
+
+def _as_rdkit_array(values: EmbeddingSequence, metric: str, n_jobs: int = 1, batch_size: int = 256):
+    """
+    Return ExplicitBitVect objects, converting NumPy binary vectors in parallel if needed.
+
+    Parameters
+    ----------
+    values: EmbeddingSequence
+        Sequence of NumPy arrays or RDKit bit vectors.
+    metric: str
+        RDKit similarity metric used for conversion validation.
+    n_jobs: int, optional
+        Number of parallel worker processes. Default is 1.
+    batch_size: int, optional
+        Maximum number of embeddings per conversion batch. Default is 256.
+
+    Returns
+    -------
+    Sequence[ExplicitBitVect]
+        RDKit bit vectors, either passed through or converted from binary NumPy arrays.
     """
     if len(values) == 0:
         return []
 
-    all_rdkit = all(isinstance(value, ExplicitBitVect) for value in values)
-    any_rdkit = any(isinstance(value, ExplicitBitVect) for value in values)
+    _, n_jobs, value_batches = batch_data(
+        data=values, n_jobs=n_jobs, batch_size=batch_size,
+    )
+
+    type_flags = Parallel(n_jobs=n_jobs, backend="loky")(
+        delayed(_rdkit_array_type_flags)(values=batch)
+        for batch in value_batches
+    )
+
+    all_rdkit = all(batch_all_rdkit for batch_all_rdkit, _, _ in type_flags)
+    any_rdkit = any(batch_any_rdkit for _, batch_any_rdkit, _ in type_flags)
+    all_numpy = all(batch_all_numpy for _, _, batch_all_numpy in type_flags)
 
     if any_rdkit and not all_rdkit:
         raise TypeError("Cannot mix NumPy arrays and ExplicitBitVect objects in the same sequence.")
@@ -289,13 +325,17 @@ def _as_rdkit_array(values: EmbeddingSequence, metric: str):
     if all_rdkit:
         return values
 
-    if not all(isinstance(value, np.ndarray) for value in values):
+    if not all_numpy:
         raise TypeError(
-            "RDKit metrics require a sequence containing either only NumPy "
-            "arrays or only ExplicitBitVect objects."
+            "RDKit metrics require a sequence containing either only NumPy arrays or only ExplicitBitVect objects."
         )
 
-    return _convert_embeddings(values, metric=metric)
+    converted_batches = Parallel(n_jobs=n_jobs, backend="loky")(
+        delayed(_convert_embeddings)(array=batch, metric=metric)
+        for batch in value_batches
+    )
+
+    return list(chain.from_iterable(converted_batches))
 
 
 def _as_numpy_matrix(values: EmbeddingSequence, name: str) -> npt.NDArray:
@@ -476,8 +516,8 @@ def distance_matrix(array_1: EmbeddingSequence, array_2: EmbeddingSequence | Non
 
     # RDKit path
     if similarity_fn is not None:
-        array_1 = _as_rdkit_array(array_1, metric=metric)
-        array_2 = array_1 if self_comparison else _as_rdkit_array(array_2, metric=metric)
+        array_1 = _as_rdkit_array(array_1, metric=metric, n_jobs=n_jobs, batch_size=batch_size)
+        array_2 = array_1 if self_comparison else _as_rdkit_array(array_2, metric=metric, n_jobs=n_jobs, batch_size=batch_size)
 
         n_rows, n_cols = len(array_1), len(array_2)
 
@@ -833,8 +873,8 @@ def k_neighbors_distance(query_array: EmbeddingSequence, ref_array: EmbeddingSeq
 
     # RDKit route
     if metric in rdkit_similarity_functions:
-        query_array = _as_rdkit_array(query_array, metric=metric)
-        ref_array = query_array if self_comparison else _as_rdkit_array(ref_array, metric=metric)
+        query_array = _as_rdkit_array(query_array, metric=metric, n_jobs=n_jobs, batch_size=batch_size)
+        ref_array = query_array if self_comparison else _as_rdkit_array(ref_array, metric=metric, n_jobs=n_jobs, batch_size=batch_size)
 
         blocks = Parallel(n_jobs=n_jobs, backend="loky")(
             delayed(_rdkit_k_neighbors_block)(
