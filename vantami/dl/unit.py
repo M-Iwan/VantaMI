@@ -167,12 +167,18 @@ class MMUnit(nn.Module, ABC):
 
     @staticmethod
     def _is_empty_dir(path: Path | str) -> bool:
+        """
+        Check if a directory exists and is empty
+        """
         path = Path(path).expanduser().resolve()
         is_empty = path.is_dir() and not any(path.iterdir())
         return is_empty
 
     @staticmethod
     def _verify_path_dir(path: Path | str) -> Path:
+        """
+        Check if a directory exists
+        """
         path = Path(path).expanduser().resolve()
 
         if not path.exists():
@@ -184,6 +190,9 @@ class MMUnit(nn.Module, ABC):
 
     @staticmethod
     def _verify_path_file(path: Path | str) -> Path:
+        """
+        Check if a file exists
+        """
         path = Path(path).expanduser().resolve()
 
         if not path.exists():
@@ -207,12 +216,18 @@ class MMUnit(nn.Module, ABC):
         return None
 
     def _batch_to_device(self, batch_data: dict) -> dict:
+        """
+        Transfer all objects with .to() method to the selected device
+        """
         return {
             key: value.to(self.device, non_blocking=True) if hasattr(value, "to") else value
             for key, value in batch_data.items()
         }
 
     def _autocast_context(self):
+        """
+        Torch autocast context
+        """
         return torch.autocast(
             device_type=self.device.type,
             dtype=self.autocast_dtype,
@@ -263,7 +278,7 @@ class MMUnit(nn.Module, ABC):
 
     def _record_epoch_metrics(self, epoch_number: int, phase: str, loss: LossSummary, metrics: Dict[str, Any],
                               gradient_norms: List[float] | None = None, per_task: bool = False,
-                              per_group: bool = False) -> None:
+                              per_group: bool = False, append: bool = True) -> None:
         """
         Append epoch-level losses and metrics to the metric log.
 
@@ -283,6 +298,8 @@ class MMUnit(nn.Module, ABC):
             Whether to save per-task logs
         per_group: bool
             Whether to save per-group logs
+        append: bool
+            Whether to append the results to self.logs_df
         """
         records = []
 
@@ -321,14 +338,18 @@ class MMUnit(nn.Module, ABC):
         if phase == "training" and self.optimizer is not None:
             add_record("Total", "learning_rate", self.optimizer.param_groups[0]["lr"])
 
-        if records:
+        if records and append:
             self.logs_df = pl.concat(
                 (self.logs_df, pl.DataFrame(records, schema=self.logs_df.schema)),
                 how="vertical",
             )
+        return records
 
     @staticmethod
     def _detach_loss_summary(loss_summary: LossSummary) -> LossSummary:
+        """
+        Detach total, per-task, and per-group losses
+        """
         detached = {
             "Total": tuple(value.detach().cpu() for value in loss_summary["Total"]),
             "Task": tuple(value.detach().cpu() for value in loss_summary["Task"]),
@@ -344,6 +365,9 @@ class MMUnit(nn.Module, ABC):
 
     @staticmethod
     def _mask_metric_data(y_true: npt.NDArray, y_pred: npt.NDArray, y_wgts: npt.NDArray):
+        """
+        Mask infinite and missing values from metrics calculation
+        """
         mask = (
                 np.isfinite(y_true)
                 & np.isfinite(y_pred)
@@ -354,6 +378,9 @@ class MMUnit(nn.Module, ABC):
         return y_true[mask], y_pred[mask], y_wgts[mask]
 
     def _step_scheduler(self, metric: Optional[float] = None) -> None:
+        """
+        Step the scheduler, if set
+        """
         if self.scheduler is None:
             return
 
@@ -510,6 +537,27 @@ class MMUnit(nn.Module, ABC):
             full_metrics: bool = False, per_task: bool = False, per_group: bool = False):
         """
         Train the model using training loss for early stopping.
+
+        Parameters
+        ----------
+        train_dataloader: Iterable[dict]
+            Training dataloader yielding batches in form of Dict[str, Tensor-like]
+        train_eval_dataloader: Iterable[dict]
+            Separate dataloader for post-training-epoch evaluation.
+        n_epochs: int
+            Number of training epochs
+        early_stop: int
+            If not None, number of epochs to train w/o improvement
+        save_freq: int
+            If not None, how often to save model checkpoints
+        save_dir: Path | str | None
+            If not None, directory for saving results and checkpoints
+        full_metrics: bool
+            Whether to calculate full sklearn-like suite of performance metrics.
+        per_task: bool
+            Whether to calculate per-task metrics
+        per_grop: bool
+            Whether to calculate per-group metrics
         """
         if self.loss_fn is None or self.optimizer is None:
             raise ValueError("Set the loss function and optimizer before fitting the model.")
@@ -571,7 +619,7 @@ class MMUnit(nn.Module, ABC):
             self.logs["train_loss"].append((epoch_number, train_eval_loss))
             self.logs["train_metrics"].append((epoch_number, train_eval_metrics))
 
-            self._record_epoch_metrics(
+            _ = self._record_epoch_metrics(
                 epoch_number=epoch_number,
                 phase="optimization",
                 loss=train_loss,
@@ -580,7 +628,7 @@ class MMUnit(nn.Module, ABC):
                 per_task=per_task,
                 per_group=per_group,
             )
-            self._record_epoch_metrics(
+            _ = self._record_epoch_metrics(
                 epoch_number=epoch_number,
                 phase="training",
                 loss=train_eval_loss,
@@ -653,6 +701,31 @@ class MMUnit(nn.Module, ABC):
                  eval_full_metrics: bool = True, per_task: bool = False, per_group: bool = False):
         """
         Train and evaluate the model, using evaluation loss for early stopping.
+
+        Parameters
+        ----------
+        train_dataloader: Iterable[dict]
+            Training dataloader yielding batches in form of Dict[str, Tensor-like]
+        train_eval_dataloader: Iterable[dict]
+            Separate dataloader for post-training-epoch evaluation.
+        eval_dataloader: Iterable[dict]
+            Evaluation dataloader yielding batches in form of Dict[str, Tensor-like]
+        n_epochs: int
+            Number of training epochs
+        early_stop: int
+            If not None, number of epochs to train w/o improvement
+        save_freq: int
+            If not None, how often to save model checkpoints
+        save_dir: Path | str | None
+            If not None, directory for saving results and checkpoints
+        train_full_metrics: bool
+            Whether to calculate full sklearn-like suite of performance metrics for training data
+        eval_full_metrics: bool
+            Whether to calculate full sklearn-like suite of performance metrics for evaluation data
+        per_task: bool
+            Whether to calculate per-task metrics
+        per_grop: bool
+            Whether to calculate per-group metrics
         """
         if self.loss_fn is None or self.optimizer is None:
             raise ValueError("Set the loss function and optimizer before fitting the model.")
@@ -724,7 +797,7 @@ class MMUnit(nn.Module, ABC):
             self.logs["eval_loss"].append((epoch_number, eval_loss))
             self.logs["eval_metrics"].append((epoch_number, eval_metrics))
 
-            self._record_epoch_metrics(
+            _ = self._record_epoch_metrics(
                 epoch_number=epoch_number,
                 phase="optimization",
                 loss=train_loss,
@@ -733,7 +806,7 @@ class MMUnit(nn.Module, ABC):
                 per_task=per_task,
                 per_group=per_group,
             )
-            self._record_epoch_metrics(
+            _ = self._record_epoch_metrics(
                 epoch_number=epoch_number,
                 phase="training",
                 loss=train_eval_loss,
@@ -742,7 +815,7 @@ class MMUnit(nn.Module, ABC):
                 per_group=per_group,
             )
 
-            self._record_epoch_metrics(
+            _ = self._record_epoch_metrics(
                 epoch_number=epoch_number,
                 phase="validation",
                 loss=eval_loss,
@@ -804,6 +877,52 @@ class MMUnit(nn.Module, ABC):
             logs_path = save_dir / f"{self.model_name}_metrics.parquet"
             write_pl(self.logs_df, logs_path)
         self.log("Training and evaluation completed.", level=1)
+
+    def evaluate(self, dataloader: Iterable[dict], full_metrics: bool = False, per_task: bool = False,
+                 per_group: bool = False):
+        """
+        Evaluate the model on new data.
+
+
+        Parameters
+        ----------
+        dataloader: Iterable[dict]
+            Evaluation dataloader yielding batches in form of Dict[str, Tensor-like]
+        n_epochs: int
+            Number of training epochs
+        early_stop: int
+            If not None, number of epochs to train w/o improvement
+        save_freq: int
+            If not None, how often to save model checkpoints
+        save_dir: Path | str | None
+            If not None, directory for saving results and checkpoints
+        full_metrics: bool
+            Whether to calculate full sklearn-like suite of performance metrics
+        per_task: bool
+            Whether to calculate per-task metrics
+        per_grop: bool
+            Whether to calculate per-group metrics
+
+        """
+        if self.loss_fn is None or self.optimizer is None:
+            raise ValueError("Set the loss function and optimizer before evaluating with the model.")
+
+        eval_loss, eval_metrics = self.eval_epoch(
+            dataloader, full_metrics=eval_full_metrics, per_task=per_task
+        )
+
+        records = self._record_epoch_metrics(
+            epoch_number=epoch_number,
+            phase="evaluation",
+            loss=eval_loss,
+            metrics=eval_metrics,
+            per_task=per_task,
+            per_group=per_group,
+            append=False
+        )
+
+        record_df = pl.DataFrame(records, schema=self.logs_df.schema)
+        return record_df
 
     def predict(self, dataloader: Iterable[dict]) -> npt.NDArray:
         """
@@ -1089,9 +1208,12 @@ class MMUnit(nn.Module, ABC):
 
     def save(self, path: Path | str) -> None:
         """
-        Save a full training state.
+        Save a full training state. Includes model, optimizer, scheduler, logs, and RNG states.
 
-        Includes model, optimizer, scheduler, logs, and RNG states.
+        Parameters
+        ----------
+        path: Path | str
+            Path for saving the model
         """
         path = Path(path).expanduser().resolve()
 
@@ -1131,6 +1253,11 @@ class MMUnit(nn.Module, ABC):
     def load(self, path: Path | str) -> None:
         """
         Load a full training state from a checkpoint.
+
+        Parameters
+        ----------
+        path: Path | str
+            Path for loading the model
         """
         path = self._verify_path_file(path)
 
