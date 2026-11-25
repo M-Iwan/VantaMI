@@ -1,3 +1,9 @@
+# [0.6.2]: XX-XX-2026
+
+[Added]
+
+- added `evaluate` method to `MMUnit` as a convenience option for obtaining performance metrics directly
+
 # [0.6.1]: 24-11-2026
 
 [Added]
