@@ -53,7 +53,7 @@ def batch_data(data: Iterable[Any], n_jobs: int = 1, batch_size: int = 256):
     data = list(data)
 
     if not data:
-        return 0, []
+        return [], 0, []
 
     n_jobs = min(effective_n_jobs(n_jobs), len(data))
     n_batches = max(n_jobs, math.ceil(len(data) / batch_size))
