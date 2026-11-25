@@ -4,6 +4,16 @@
 
 - added `evaluate` method to `MMUnit` as a convenience option for obtaining performance metrics directly
 
+[Changed]
+
+- changed the behavior of embedding casting in `vantami.data.distance`. Now all type checks and (potential) 
+conversion to ExplicitBitVector are performed in parallel using the same `n_jobs` and `batch_size` args 
+
+[Fixed]
+
+- fixed a bug in `vantami.data.partition.batch_data` where empty data return statement size didn't match the full one
+
+
 # [0.6.1]: 24-11-2026
 
 [Added]
