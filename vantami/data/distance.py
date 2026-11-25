@@ -13,6 +13,8 @@ from rdkit import DataStructs
 from rdkit.DataStructs.cDataStructs import ExplicitBitVect
 
 
+# TODO: Update the conversion functions so that they use multiple CPUs for type conversion
+
 """
 Supporting functions
 """
